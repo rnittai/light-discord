@@ -156,6 +156,7 @@ When `LD_TEST_DATABASE_URL` is not set, the integration test exits successfully 
 
 ## Docs
 
+- [Codex handoff](CODEX_HANDOFF.md)
 - [Architecture](docs/architecture.md)
 - [Development operations](docs/development-operations.md)
 - [How to use](docs/how-to-use-ja.md)
