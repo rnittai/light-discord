@@ -27,10 +27,63 @@ cargo run -p light-discord-client
 
 ## 2. PostgreSQL ありの self-hosted モード
 
-PostgreSQL を使う場合、ログイン/セッションが必須になります。初期管理者は環境変数で作成します。
+PostgreSQL を使う場合、ログイン/セッションが必須になります。`light-discord-server` から接続できる PostgreSQL が起動している必要があります。
+
+PostgreSQL は次のどれでも構いません。
+
+- 同じサーバー上で動く PostgreSQL
+- 別サーバー上で動く PostgreSQL
+- Docker Compose の PostgreSQL
+- managed PostgreSQL
+
+まず同じ Linux サーバー上に PostgreSQL を入れる場合は、セットアップスクリプトを使えます。
 
 ```bash
-export LD_DATABASE_URL=postgres://light_discord:light_discord_dev_password@localhost:5432/light_discord
+export LD_PG_DB=light_discord
+export LD_PG_USER=light_discord
+export LD_PG_PASSWORD='replace-with-a-long-random-password'
+scripts/setup-postgres-linux.sh
+```
+
+このスクリプトは以下を行います。
+
+- PostgreSQL server/client package のインストール
+- PostgreSQL service の起動
+- `LD_PG_DB` の database 作成
+- `LD_PG_USER` の database user 作成
+- password 設定
+- `LD_DATABASE_URL` の例を表示
+
+外部公開用の `listen_addresses` や `pg_hba.conf` は自動変更しません。まずは同一ホストの `localhost` 接続として使う想定です。
+
+手動でパッケージを入れる場合:
+
+```bash
+# Debian / Ubuntu
+sudo apt-get update
+sudo apt-get install -y postgresql postgresql-client
+
+# Fedora / RHEL 系
+sudo dnf install -y postgresql-server postgresql-contrib
+sudo postgresql-setup --initdb
+sudo systemctl enable --now postgresql
+
+# openSUSE
+sudo zypper --non-interactive install postgresql-server postgresql-contrib
+sudo systemctl enable --now postgresql
+```
+
+DB 接続確認:
+
+```bash
+export LD_DATABASE_URL=postgres://light_discord:your-password@localhost:5432/light_discord
+scripts/check-postgres.sh
+```
+
+接続できることを確認したら、初期管理者を指定してサーバーを起動します。
+
+```bash
+export LD_DATABASE_URL=postgres://light_discord:your-password@localhost:5432/light_discord
 export LD_BOOTSTRAP_ADMIN_NAME=admin
 export LD_BOOTSTRAP_ADMIN_PASSWORD='change-this-password'
 export LD_BOOTSTRAP_INVITE_CODE='first-friend-invite'
@@ -145,4 +198,3 @@ cargo test -p light-discord-storage --test postgres
 ```
 
 `LD_TEST_DATABASE_URL` が未設定の場合、PostgreSQL 統合テストは DB に触らず成功扱いで終了します。Docker-in-Docker や DB がない環境でも通常テストを通せるようにするためです。
-

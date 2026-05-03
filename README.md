@@ -52,13 +52,48 @@ docker compose up --build
 For a locally running PostgreSQL instance, set:
 
 ```bash
-export LD_DATABASE_URL=postgres://light_discord:light_discord_dev_password@localhost:5432/light_discord
+export LD_DATABASE_URL=postgres://light_discord:your-password@localhost:5432/light_discord
 export LD_BOOTSTRAP_ADMIN_NAME=admin
 export LD_BOOTSTRAP_ADMIN_PASSWORD='change-this-password'
 cargo run -p light-discord-server
 ```
 
 If `LD_DATABASE_URL` is not set, the server uses in-memory storage for development only.
+
+PostgreSQL must be running somewhere the server can reach. It can be on the same host, another server, Docker Compose, or a managed PostgreSQL service. For a same-host Linux setup, use:
+
+```bash
+export LD_PG_DB=light_discord
+export LD_PG_USER=light_discord
+export LD_PG_PASSWORD='replace-with-a-long-random-password'
+scripts/setup-postgres-linux.sh
+```
+
+Then start the server with the printed `LD_DATABASE_URL`.
+
+Manual package install examples:
+
+```bash
+# Debian / Ubuntu
+sudo apt-get update
+sudo apt-get install -y postgresql postgresql-client
+
+# Fedora / RHEL-like
+sudo dnf install -y postgresql-server postgresql-contrib
+sudo postgresql-setup --initdb
+sudo systemctl enable --now postgresql
+
+# openSUSE
+sudo zypper --non-interactive install postgresql-server postgresql-contrib
+sudo systemctl enable --now postgresql
+```
+
+Check a configured database URL:
+
+```bash
+export LD_DATABASE_URL=postgres://light_discord:your-password@localhost:5432/light_discord
+scripts/check-postgres.sh
+```
 
 ## How To Use
 
@@ -76,7 +111,7 @@ For self-hosted use with accounts:
 1. Start the server with PostgreSQL and bootstrap credentials:
 
 ```bash
-export LD_DATABASE_URL=postgres://light_discord:light_discord_dev_password@localhost:5432/light_discord
+export LD_DATABASE_URL=postgres://light_discord:your-password@localhost:5432/light_discord
 export LD_BOOTSTRAP_ADMIN_NAME=admin
 export LD_BOOTSTRAP_ADMIN_PASSWORD='change-this-password'
 export LD_BOOTSTRAP_INVITE_CODE='first-friend-invite'
@@ -118,6 +153,7 @@ When `LD_TEST_DATABASE_URL` is not set, the integration test exits successfully 
 ## Docs
 
 - [Architecture](docs/architecture.md)
+- [Development operations](docs/development-operations.md)
 - [How to use](docs/how-to-use-ja.md)
 - [Requirements](docs/requirements-ja.md)
 - [Requirements checklist](docs/requirements-checklist.md)
