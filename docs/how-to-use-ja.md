@@ -158,6 +158,30 @@ cargo run -p light-discord-client
 - 削除したメッセージは通常のチャンネル履歴から消えます。
 - 削除内容は管理者専用の監査ログに本文 snapshot 付きで保存されます。
 
+## 日本語が文字化けする場合
+
+クライアントは起動時に日本語表示可能な system font を探して `egui` に登録します。Linux で日本語が文字化けする場合は、日本語フォントが入っていない可能性があります。
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install -y fonts-noto-cjk
+
+# Fedora
+sudo dnf install -y google-noto-sans-cjk-fonts
+
+# Arch
+sudo pacman -S noto-fonts-cjk
+```
+
+特定のフォントファイルを明示することもできます。
+
+```bash
+export LIGHT_DISCORD_FONT_PATH=/path/to/NotoSansCJK-Regular.ttc
+cargo run -p light-discord-client
+```
+
+Windows では `C:\Windows\Fonts` 配下の Meiryo / Yu Gothic / MS Gothic 系フォントを探します。
+
 ## 8. 監査ログを見る
 
 管理者で接続して、左サイドバーの `Admin` セクションから `Audit` を押します。中央に `Audit log` が表示されます。

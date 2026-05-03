@@ -145,6 +145,27 @@ Current limitations:
 - Account management, password reset, role management, TLS setup, and production voice are still future work.
 - The client UI is intentionally minimal and aimed at validating the backend flow first.
 
+Japanese text rendering:
+
+The native client tries to load a Japanese-capable system font at startup. If Japanese text appears garbled, install a Japanese font or point the client at one explicitly:
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install -y fonts-noto-cjk
+
+# Fedora
+sudo dnf install -y google-noto-sans-cjk-fonts
+
+# Arch
+sudo pacman -S noto-fonts-cjk
+
+# Explicit font file override
+export LIGHT_DISCORD_FONT_PATH=/path/to/NotoSansCJK-Regular.ttc
+cargo run -p light-discord-client
+```
+
+On Windows, the client checks common system fonts such as Meiryo and Yu Gothic under `C:\Windows\Fonts`.
+
 Run PostgreSQL integration tests when a database is available:
 
 ```bash

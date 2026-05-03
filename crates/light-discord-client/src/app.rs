@@ -1,4 +1,4 @@
-use crate::{net::ClientEvent, net::NetworkHandle, voice::VoiceSession};
+use crate::{fonts, net::ClientEvent, net::NetworkHandle, voice::VoiceSession};
 use eframe::egui;
 use light_discord_core::{
     AuditLogSummary, ChatMessage, ClientFrame, ServerFrame, UserSummary, VoiceUser,
@@ -40,7 +40,12 @@ pub struct LightDiscordApp {
 }
 
 impl LightDiscordApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let status = match fonts::configure_japanese_fonts(&cc.egui_ctx) {
+            Some(path) => format!("offline / font: {}", path.display()),
+            None => "offline / Japanese font not found".to_owned(),
+        };
+
         Self {
             server_addr: "127.0.0.1:41610".to_owned(),
             display_name: whoami_fallback(),
@@ -48,7 +53,7 @@ impl LightDiscordApp {
             invite_code: String::new(),
             session_token: String::new(),
             auth_mode: AuthMode::Login,
-            status: "offline".to_owned(),
+            status,
             channel_id: "general".to_owned(),
             voice_room_id: "voice-general".to_owned(),
             input: String::new(),

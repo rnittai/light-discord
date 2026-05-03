@@ -222,6 +222,23 @@ At the time of this handoff, `main` was pushed to `origin/main`.
 - Native packaging for Windows/Linux has not been implemented.
 - Docker CLI is not installed in the current container, though Docker Compose files exist for host-side use.
 
+## Japanese Font Rendering
+
+Japanese text initially appeared garbled because egui's default fonts do not cover Japanese glyphs. The client now loads a Japanese-capable system font at startup.
+
+Implementation:
+
+- `crates/light-discord-client/src/fonts.rs` discovers and registers Japanese fonts.
+- `LIGHT_DISCORD_FONT_PATH` can force a specific `.ttf`, `.otf`, or `.ttc` file.
+- Linux candidates include Noto CJK, IPA, and Takao font paths.
+- Windows candidates include Meiryo, Yu Gothic, and MS Gothic under `C:\Windows\Fonts`.
+
+This Docker container has `fonts-noto-cjk` installed for verification, and the detected path is:
+
+```text
+/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+```
+
 ## Good Next Tasks
 
 Suggested next development steps:
@@ -246,4 +263,3 @@ Recommended behavior:
 - Commit with a concise message.
 - Push to the configured remote when successful.
 - If push fails, keep the local commit and report the exact failure.
-
