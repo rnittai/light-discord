@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: light_discord
+      POSTGRES_USER: light_discord
+      POSTGRES_PASSWORD: light_discord_dev_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U light_discord -d light_discord"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LD_DATABASE_URL: postgres://light_discord:light_discord_dev_password@postgres:5432/light_discord
+      LD_TCP_BIND: 0.0.0.0:41610
+      LD_UDP_BIND: 0.0.0.0:41611
+      LD_BOOTSTRAP_ADMIN_NAME: ${LD_BOOTSTRAP_ADMIN_NAME:-admin}
+      LD_BOOTSTRAP_ADMIN_PASSWORD: ${LD_BOOTSTRAP_ADMIN_PASSWORD:-change_me_before_exposure}
+      LD_BOOTSTRAP_INVITE_CODE: ${LD_BOOTSTRAP_INVITE_CODE:-friend-invite-change-me}
+      LD_DEV_AUTH: "0"
+      LD_VISIBLE_HISTORY_DAYS: 30
+      LD_AUDIT_LOG_DAYS: 30
+    ports:
+      - "41610:41610/tcp"
+      - "41611:41611/udp"
+
+volumes:
+  postgres_data:
