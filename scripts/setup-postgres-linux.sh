@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DB_NAME="${LD_PG_DB:-light_discord}"
-DB_USER="${LD_PG_USER:-light_discord}"
-DB_PASSWORD="${LD_PG_PASSWORD:-}"
+# sudo aggressively strips LD_* variables because they can affect the dynamic
+# linker. Accept LD_PG_* for the public interface, but copy them to a safe
+# LIGHT_DISCORD_PG_* namespace before re-execing through sudo.
+DB_NAME="${LIGHT_DISCORD_PG_DB:-${LD_PG_DB:-light_discord}}"
+DB_USER="${LIGHT_DISCORD_PG_USER:-${LD_PG_USER:-light_discord}}"
+DB_PASSWORD="${LIGHT_DISCORD_PG_PASSWORD:-${LD_PG_PASSWORD:-}}"
+DB_PORT="${LIGHT_DISCORD_PG_PORT:-${LD_PG_PORT:-}}"
 
 if [[ -z "${DB_PASSWORD}" ]]; then
   cat >&2 <<'EOF'
@@ -18,6 +22,10 @@ fi
 
 if [[ "${EUID}" -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then
+    export LIGHT_DISCORD_PG_DB="${DB_NAME}"
+    export LIGHT_DISCORD_PG_USER="${DB_USER}"
+    export LIGHT_DISCORD_PG_PASSWORD="${DB_PASSWORD}"
+    export LIGHT_DISCORD_PG_PORT="${DB_PORT}"
     exec sudo -E bash "$0" "$@"
   fi
 
@@ -83,18 +91,35 @@ start_postgres() {
 }
 
 psql_as_postgres() {
+  local psql_args=()
+  if [[ -n "${DB_PORT}" ]]; then
+    psql_args=(-p "${DB_PORT}")
+  fi
+
   if command -v runuser >/dev/null 2>&1; then
-    runuser -u postgres -- psql "$@"
+    runuser -u postgres -- psql "${psql_args[@]}" "$@"
     return
   fi
 
   if command -v sudo >/dev/null 2>&1; then
-    sudo -u postgres psql "$@"
+    sudo -u postgres psql "${psql_args[@]}" "$@"
     return
   fi
 
   echo "Cannot run psql as the postgres OS user." >&2
   exit 1
+}
+
+detect_postgres_port() {
+  if [[ -n "${DB_PORT}" ]]; then
+    return
+  fi
+
+  if command -v pg_lsclusters >/dev/null 2>&1; then
+    DB_PORT="$(pg_lsclusters --no-header | awk '$4 == "online" {print $3; exit}')"
+  fi
+
+  DB_PORT="${DB_PORT:-5432}"
 }
 
 create_database_and_user() {
@@ -108,27 +133,27 @@ WHERE NOT EXISTS (
   SELECT 1 FROM pg_roles WHERE rolname = :'db_user'
 )\gexec
 
-ALTER ROLE :"db_user" WITH LOGIN PASSWORD :'db_password';
+SELECT format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'db_user', :'db_password')\gexec
 
 SELECT format('CREATE DATABASE %I OWNER %I', :'db_name', :'db_user')
 WHERE NOT EXISTS (
   SELECT 1 FROM pg_database WHERE datname = :'db_name'
 )\gexec
 
-GRANT ALL PRIVILEGES ON DATABASE :"db_name" TO :"db_user";
+SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'db_name', :'db_user')\gexec
 SQL
 }
 
 install_postgres
 start_postgres
+detect_postgres_port
 create_database_and_user
 
 cat <<EOF
 PostgreSQL is ready for Light Discord.
 
 Use this server environment variable:
-  export LD_DATABASE_URL='postgres://${DB_USER}:${DB_PASSWORD}@localhost:5432/${DB_NAME}'
+  export LD_DATABASE_URL='postgres://${DB_USER}:${DB_PASSWORD}@localhost:${DB_PORT}/${DB_NAME}'
 
 If your password contains URL special characters, URL-encode it in LD_DATABASE_URL.
 EOF
-

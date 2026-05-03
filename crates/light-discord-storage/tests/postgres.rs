@@ -26,10 +26,11 @@ async fn postgres_storage_auth_message_delete_and_audit_flow() -> anyhow::Result
         other => panic!("unexpected account creation result: {other:?}"),
     };
 
+    let session_hash = format!("session-hash-{}", Uuid::new_v4().simple());
     storage
-        .create_session("session-hash", &account.user_id)
+        .create_session(&session_hash, &account.user_id)
         .await?;
-    let session = storage.validate_session("session-hash").await?.unwrap();
+    let session = storage.validate_session(&session_hash).await?.unwrap();
     assert_eq!(session.user_id, account.user_id);
 
     let message = ChatMessage::new(

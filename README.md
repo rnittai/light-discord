@@ -71,6 +71,10 @@ scripts/setup-postgres-linux.sh
 
 Then start the server with the printed `LD_DATABASE_URL`.
 
+The setup script accepts `LD_PG_*` for convenience. When it needs to re-run itself with `sudo`, it copies those values to `LIGHT_DISCORD_PG_*` first because sudo commonly strips `LD_*` variables for dynamic linker safety.
+
+If PostgreSQL is not running on the default port, the script detects the active Debian/Ubuntu cluster port with `pg_lsclusters`. You can also force a port with `LD_PG_PORT`.
+
 Manual package install examples:
 
 ```bash

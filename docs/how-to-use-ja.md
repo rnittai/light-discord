@@ -45,6 +45,10 @@ export LD_PG_PASSWORD='replace-with-a-long-random-password'
 scripts/setup-postgres-linux.sh
 ```
 
+`LD_*` で始まる環境変数は sudo が dynamic linker 系の危険な変数として削除することがあります。そのため、このスクリプトは root 再実行の直前に `LD_PG_*` を `LIGHT_DISCORD_PG_*` に写して渡します。利用者側は上記の `LD_PG_*` のままで構いません。
+
+PostgreSQL が `5432` 以外で起動している場合、Debian / Ubuntu では `pg_lsclusters` から起動中 cluster の port を検出して `LD_DATABASE_URL` の例に反映します。明示したい場合は `LD_PG_PORT` を指定してください。
+
 このスクリプトは以下を行います。
 
 - PostgreSQL server/client package のインストール
