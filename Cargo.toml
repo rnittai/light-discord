@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "crates/light-discord-auth",
+    "crates/light-discord-client",
+    "crates/light-discord-core",
+    "crates/light-discord-platform",
+    "crates/light-discord-server",
+    "crates/light-discord-storage",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+rust-version = "1.95"
+
+[workspace.dependencies]
+anyhow = "1"
+argon2 = "0.5"
+eframe = "0.27"
+egui = "0.27"
+password-hash = { version = "0.5", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+uuid = { version = "1", features = ["v4"] }
