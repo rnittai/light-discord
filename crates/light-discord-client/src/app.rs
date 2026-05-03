@@ -382,6 +382,31 @@ impl eframe::App for LightDiscordApp {
                 }
             });
 
+        egui::TopBottomPanel::bottom("message_composer")
+            .resizable(false)
+            .exact_height(48.0)
+            .show(ctx, |ui| {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(format!("# {}", self.channel_id));
+                    let response = ui.add_enabled(
+                        self.connected,
+                        egui::TextEdit::singleline(&mut self.input)
+                            .hint_text("Message")
+                            .desired_width(f32::INFINITY),
+                    );
+                    let pressed_enter = response.lost_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    if ui
+                        .add_enabled(self.connected, egui::Button::new("Send"))
+                        .clicked()
+                        || (self.connected && pressed_enter)
+                    {
+                        self.send_message();
+                    }
+                });
+            });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading(format!("# {}", self.channel_id));
             ui.separator();
@@ -433,19 +458,6 @@ impl eframe::App for LightDiscordApp {
                 });
                 ui.separator();
             }
-
-            ui.horizontal(|ui| {
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut self.input)
-                        .hint_text("Message")
-                        .desired_width(f32::INFINITY),
-                );
-                let pressed_enter =
-                    response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                if ui.button("Send").clicked() || pressed_enter {
-                    self.send_message();
-                }
-            });
         });
 
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
