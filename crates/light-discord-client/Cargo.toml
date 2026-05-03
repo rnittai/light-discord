@@ -1,0 +1,15 @@
+[package]
+name = "light-discord-client"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+eframe.workspace = true
+egui.workspace = true
+light-discord-core = { path = "../light-discord-core" }
+light-discord-platform = { path = "../light-discord-platform" }
+serde_json.workspace = true
+
