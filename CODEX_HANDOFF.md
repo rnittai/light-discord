@@ -48,9 +48,9 @@ Because of that, the implementation was completed manually in this repo.
 
 ## AI Workflow Preference
 
-The user wants Codex to handle overall design, task decomposition, sequencing, review, verification decisions, and integration. Actual code-writing implementation work should be delegated to Claude Code workers when the tooling is available. Select the Claude Code model according to the task complexity rather than using one fixed model for every implementation task.
+The user wants Codex to handle overall design, task decomposition, sequencing, review, verification decisions, and integration. Actual code-writing implementation work should be delegated to Claude Code workers when the tooling is available. Git operations should also be delegated to Claude Code when practical, including `git status`, `git add`, `git commit`, and `git push`; Codex should decide the checkpoint/scope and review the resulting repository state. Select the Claude Code model according to the task complexity rather than using one fixed model for every implementation task.
 
-If Claude Code delegation is blocked by the environment, document the blocker clearly before falling back to direct implementation. Codex should still review diffs, run relevant checks, and handle commits/pushes.
+If Claude Code delegation is blocked by the environment, document the blocker clearly before falling back to direct implementation. Codex should still review diffs, run relevant checks, and preserve task-sized commits/pushes.
 
 ## Current Architecture
 
@@ -283,6 +283,7 @@ Recommended behavior:
 - Inspect `git status` before changes.
 - Keep commits coherent and task-sized.
 - Run relevant verification before committing.
-- Commit with a concise message.
+- Ask Claude Code to run git operations when available, including commit and push.
+- Use a concise commit message.
 - Push to the configured remote when successful.
 - If push fails, keep the local commit and report the exact failure.
