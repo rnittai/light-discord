@@ -1,10 +1,19 @@
-use anyhow::{Context, Result};
-use cpal::traits::{DeviceTrait, HostTrait};
-use std::collections::HashMap;
+use anyhow::{anyhow, Context, Result};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{FromSample, Sample, SampleFormat, SizedSample};
+use std::collections::{HashMap, VecDeque};
+use std::str::FromStr;
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub const DEFAULT_INPUT_DEVICE_ID: &str = "default-input";
 pub const DEFAULT_OUTPUT_DEVICE_ID: &str = "default-output";
+
+/// Maximum number of i16 samples kept in the playback queue. At 48 kHz stereo
+/// this is roughly 1 second of audio; older samples are dropped if the writer
+/// outpaces the audio device.
+const PLAYBACK_QUEUE_CAP_SAMPLES: usize = 48_000 * 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioDeviceKind {
@@ -224,6 +233,399 @@ impl AudioBackend for NoopAudioBackend {
     }
 }
 
+/// Real cpal-backed audio backend used by the production client.
+pub struct CpalAudioBackend {
+    input_stream: Option<cpal::Stream>,
+    output_stream: Option<cpal::Stream>,
+}
+
+impl CpalAudioBackend {
+    pub fn new() -> Self {
+        Self {
+            input_stream: None,
+            output_stream: None,
+        }
+    }
+}
+
+impl Default for CpalAudioBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AudioBackend for CpalAudioBackend {
+    fn backend_name(&self) -> &'static str {
+        "cpal"
+    }
+
+    fn start_capture(&mut self, device_id: Option<&str>, tx: Sender<AudioFrame>) -> Result<()> {
+        // Drop any prior stream first so we don't hold two input devices open.
+        self.input_stream = None;
+
+        let host = cpal::default_host();
+        let device = resolve_input_device(&host, device_id)?;
+        let supported = device
+            .default_input_config()
+            .context("failed to query default input config")?;
+        let sample_format = supported.sample_format();
+        let sample_rate = supported.sample_rate();
+        let channels = supported.channels();
+        let config: cpal::StreamConfig = supported.config();
+
+        let err_callback = |err| eprintln!("voice capture stream error: {err}");
+
+        let stream = match sample_format {
+            SampleFormat::F32 => build_input_stream::<f32>(
+                &device,
+                &config,
+                sample_format,
+                sample_rate,
+                channels,
+                tx,
+                err_callback,
+            ),
+            SampleFormat::I16 => build_input_stream::<i16>(
+                &device,
+                &config,
+                sample_format,
+                sample_rate,
+                channels,
+                tx,
+                err_callback,
+            ),
+            SampleFormat::U16 => build_input_stream::<u16>(
+                &device,
+                &config,
+                sample_format,
+                sample_rate,
+                channels,
+                tx,
+                err_callback,
+            ),
+            SampleFormat::I8 => build_input_stream::<i8>(
+                &device,
+                &config,
+                sample_format,
+                sample_rate,
+                channels,
+                tx,
+                err_callback,
+            ),
+            SampleFormat::U8 => build_input_stream::<u8>(
+                &device,
+                &config,
+                sample_format,
+                sample_rate,
+                channels,
+                tx,
+                err_callback,
+            ),
+            SampleFormat::I32 => build_input_stream::<i32>(
+                &device,
+                &config,
+                sample_format,
+                sample_rate,
+                channels,
+                tx,
+                err_callback,
+            ),
+            SampleFormat::U32 => build_input_stream::<u32>(
+                &device,
+                &config,
+                sample_format,
+                sample_rate,
+                channels,
+                tx,
+                err_callback,
+            ),
+            SampleFormat::F64 => build_input_stream::<f64>(
+                &device,
+                &config,
+                sample_format,
+                sample_rate,
+                channels,
+                tx,
+                err_callback,
+            ),
+            other => {
+                return Err(anyhow!(
+                    "unsupported input sample format: {other:?} (sample_rate={sample_rate} channels={channels})"
+                ));
+            }
+        }
+        .with_context(|| format!("failed to build {sample_format:?} input stream"))?;
+
+        stream
+            .play()
+            .context("failed to start input stream playback")?;
+        self.input_stream = Some(stream);
+        Ok(())
+    }
+
+    fn start_playback(&mut self, device_id: Option<&str>, rx: Receiver<AudioFrame>) -> Result<()> {
+        self.output_stream = None;
+
+        let host = cpal::default_host();
+        let device = resolve_output_device(&host, device_id)?;
+        let supported = device
+            .default_output_config()
+            .context("failed to query default output config")?;
+        let sample_format = supported.sample_format();
+        let device_sample_rate = supported.sample_rate();
+        let device_channels = supported.channels();
+        let config: cpal::StreamConfig = supported.config();
+
+        let queue: Arc<Mutex<VecDeque<i16>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let queue_writer = Arc::clone(&queue);
+        let queue_reader = Arc::clone(&queue);
+
+        // Background thread: pull AudioFrames off the channel and push i16 samples
+        // (already adapted to the device channel count) into the bounded queue.
+        std::thread::spawn(move || feed_playback_queue(rx, queue_writer, device_channels));
+
+        let err_callback = |err| eprintln!("voice playback stream error: {err}");
+
+        let stream = match sample_format {
+            SampleFormat::F32 => {
+                build_output_stream::<f32>(&device, &config, queue_reader, err_callback)
+            }
+            SampleFormat::I16 => {
+                build_output_stream::<i16>(&device, &config, queue_reader, err_callback)
+            }
+            SampleFormat::U16 => {
+                build_output_stream::<u16>(&device, &config, queue_reader, err_callback)
+            }
+            SampleFormat::I8 => {
+                build_output_stream::<i8>(&device, &config, queue_reader, err_callback)
+            }
+            SampleFormat::U8 => {
+                build_output_stream::<u8>(&device, &config, queue_reader, err_callback)
+            }
+            SampleFormat::I32 => {
+                build_output_stream::<i32>(&device, &config, queue_reader, err_callback)
+            }
+            SampleFormat::U32 => {
+                build_output_stream::<u32>(&device, &config, queue_reader, err_callback)
+            }
+            SampleFormat::F64 => {
+                build_output_stream::<f64>(&device, &config, queue_reader, err_callback)
+            }
+            other => {
+                return Err(anyhow!(
+                    "unsupported output sample format: {other:?} (sample_rate={device_sample_rate} channels={device_channels})"
+                ));
+            }
+        }
+        .with_context(|| format!("failed to build {sample_format:?} output stream"))?;
+
+        stream
+            .play()
+            .context("failed to start output stream playback")?;
+        self.output_stream = Some(stream);
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        self.input_stream = None;
+        self.output_stream = None;
+    }
+}
+
+fn build_input_stream<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    _sample_format: SampleFormat,
+    sample_rate: u32,
+    channels: u16,
+    tx: Sender<AudioFrame>,
+    err_callback: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<cpal::Stream, cpal::BuildStreamError>
+where
+    T: SizedSample + Send + 'static,
+    i16: FromSample<T>,
+{
+    device.build_input_stream(
+        config,
+        move |data: &[T], _info: &cpal::InputCallbackInfo| {
+            let i16_data: Vec<i16> = data.iter().map(|s| i16::from_sample(*s)).collect();
+            // Downmix to mono regardless of device channel count so payloads
+            // stay small and callers need not handle arbitrary channel widths.
+            let pcm = adapt_channels(&i16_data, channels, 1);
+            let frame = AudioFrame {
+                sample_rate,
+                channels: 1,
+                pcm,
+            };
+            // Disconnected receiver simply means the worker is shutting down.
+            let _ = tx.send(frame);
+        },
+        err_callback,
+        Some(Duration::from_millis(200)),
+    )
+}
+
+fn build_output_stream<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    queue: Arc<Mutex<VecDeque<i16>>>,
+    err_callback: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<cpal::Stream, cpal::BuildStreamError>
+where
+    T: SizedSample + FromSample<i16> + Send + 'static,
+{
+    device.build_output_stream(
+        config,
+        move |data: &mut [T], _info: &cpal::OutputCallbackInfo| {
+            let mut guard = match queue.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            for slot in data.iter_mut() {
+                let sample = guard.pop_front().unwrap_or(0);
+                *slot = T::from_sample(sample);
+            }
+        },
+        err_callback,
+        Some(Duration::from_millis(200)),
+    )
+}
+
+fn feed_playback_queue(
+    rx: Receiver<AudioFrame>,
+    queue: Arc<Mutex<VecDeque<i16>>>,
+    device_channels: u16,
+) {
+    loop {
+        match rx.recv() {
+            Ok(frame) => {
+                let adapted = adapt_channels(&frame.pcm, frame.channels, device_channels);
+                if let Ok(mut guard) = queue.lock() {
+                    guard.extend(adapted);
+                    let len = guard.len();
+                    if len > PLAYBACK_QUEUE_CAP_SAMPLES {
+                        let drop = len - PLAYBACK_QUEUE_CAP_SAMPLES;
+                        guard.drain(0..drop);
+                    }
+                }
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+/// Adapt a PCM buffer from `src_channels` to `dst_channels` interleaving.
+///
+/// Mono -> stereo duplicates each sample. Multi-channel -> mono averages the
+/// frame samples. Otherwise we copy up to `min(src, dst)` channels per frame
+/// and zero-fill the rest. `src_channels == 0` or `dst_channels == 0` returns
+/// an empty buffer.
+pub fn adapt_channels(pcm: &[i16], src_channels: u16, dst_channels: u16) -> Vec<i16> {
+    if src_channels == 0 || dst_channels == 0 || pcm.is_empty() {
+        return Vec::new();
+    }
+    if src_channels == dst_channels {
+        return pcm.to_vec();
+    }
+    let src = src_channels as usize;
+    let dst = dst_channels as usize;
+    let frames = pcm.len() / src;
+    let mut out = Vec::with_capacity(frames * dst);
+
+    if src == 1 && dst > 1 {
+        for &sample in &pcm[..frames] {
+            for _ in 0..dst {
+                out.push(sample);
+            }
+        }
+        return out;
+    }
+
+    if dst == 1 {
+        for f in 0..frames {
+            let start = f * src;
+            let mut acc: i32 = 0;
+            for c in 0..src {
+                acc += pcm[start + c] as i32;
+            }
+            out.push((acc / src as i32) as i16);
+        }
+        return out;
+    }
+
+    let copy = src.min(dst);
+    for f in 0..frames {
+        let start = f * src;
+        for c in 0..dst {
+            if c < copy {
+                out.push(pcm[start + c]);
+            } else {
+                out.push(0);
+            }
+        }
+    }
+    out
+}
+
+/// Cap a queue to at most `cap` samples, dropping oldest values first.
+pub fn cap_playback_queue(queue: &mut VecDeque<i16>, cap: usize) {
+    if queue.len() > cap {
+        let drop = queue.len() - cap;
+        queue.drain(0..drop);
+    }
+}
+
+fn resolve_input_device(host: &cpal::Host, device_id: Option<&str>) -> Result<cpal::Device> {
+    match device_id {
+        None | Some(DEFAULT_INPUT_DEVICE_ID) => host
+            .default_input_device()
+            .ok_or_else(|| anyhow!("no default input device available")),
+        Some(id) => {
+            find_device_by_id(host, id).ok_or_else(|| anyhow!("input device id not found: {id}"))
+        }
+    }
+}
+
+fn resolve_output_device(host: &cpal::Host, device_id: Option<&str>) -> Result<cpal::Device> {
+    match device_id {
+        None | Some(DEFAULT_OUTPUT_DEVICE_ID) => host
+            .default_output_device()
+            .ok_or_else(|| anyhow!("no default output device available")),
+        Some(id) => {
+            find_device_by_id(host, id).ok_or_else(|| anyhow!("output device id not found: {id}"))
+        }
+    }
+}
+
+fn find_device_by_id(host: &cpal::Host, id: &str) -> Option<cpal::Device> {
+    if let Ok(parsed) = cpal::DeviceId::from_str(id) {
+        if let Some(device) = host.device_by_id(&parsed) {
+            return Some(device);
+        }
+    }
+    // Fallback: scan all devices and compare the formatted id string.
+    host.devices()
+        .ok()?
+        .find(|device| device.id().ok().map(|d| d.to_string()).as_deref() == Some(id))
+}
+
+// Encode/decode helpers for the wire payload (little-endian i16 PCM).
+pub fn encode_pcm_le(samples: &[i16]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(samples.len() * 2);
+    for &s in samples {
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+    out
+}
+
+pub fn decode_pcm_le(bytes: &[u8]) -> Vec<i16> {
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for chunk in bytes.chunks_exact(2) {
+        out.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,5 +755,93 @@ mod tests {
         assert_eq!(result[0].id, "id2");
         assert!(result[0].is_default);
         assert_eq!(result[0].grouped_count, 3);
+    }
+
+    #[test]
+    fn pcm_round_trips_little_endian() {
+        let samples = vec![0_i16, 1, -1, 32_767, -32_768, 12345, -12345];
+        let bytes = encode_pcm_le(&samples);
+        assert_eq!(bytes.len(), samples.len() * 2);
+        let decoded = decode_pcm_le(&bytes);
+        assert_eq!(decoded, samples);
+    }
+
+    #[test]
+    fn decode_ignores_trailing_odd_byte() {
+        let mut bytes = encode_pcm_le(&[7_i16, -7]);
+        bytes.push(0xFF);
+        let decoded = decode_pcm_le(&bytes);
+        assert_eq!(decoded, vec![7, -7]);
+    }
+
+    #[test]
+    fn adapt_channels_mono_to_stereo() {
+        let pcm = vec![1_i16, 2, 3];
+        let out = adapt_channels(&pcm, 1, 2);
+        assert_eq!(out, vec![1, 1, 2, 2, 3, 3]);
+    }
+
+    #[test]
+    fn adapt_channels_stereo_to_mono_averages() {
+        let pcm = vec![10_i16, 20, -10, -20];
+        let out = adapt_channels(&pcm, 2, 1);
+        assert_eq!(out, vec![15, -15]);
+    }
+
+    #[test]
+    fn adapt_channels_passes_through_when_equal() {
+        let pcm = vec![1_i16, 2, 3, 4];
+        let out = adapt_channels(&pcm, 2, 2);
+        assert_eq!(out, pcm);
+    }
+
+    #[test]
+    fn adapt_channels_truncates_extra_dst_with_zero() {
+        // 2-ch source -> 4-ch destination: copy first 2 ch, zero-fill the rest.
+        let pcm = vec![1_i16, 2, 3, 4];
+        let out = adapt_channels(&pcm, 2, 4);
+        assert_eq!(out, vec![1, 2, 0, 0, 3, 4, 0, 0]);
+    }
+
+    #[test]
+    fn adapt_channels_handles_empty_input() {
+        let out = adapt_channels(&[], 2, 2);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn adapt_channels_zero_channels_returns_empty() {
+        let pcm = vec![1_i16, 2, 3, 4];
+        assert!(adapt_channels(&pcm, 0, 2).is_empty());
+        assert!(adapt_channels(&pcm, 2, 0).is_empty());
+    }
+
+    #[test]
+    fn cap_playback_queue_drops_oldest() {
+        let mut queue: VecDeque<i16> = (0..10).collect();
+        cap_playback_queue(&mut queue, 4);
+        assert_eq!(queue.len(), 4);
+        assert_eq!(queue.front().copied(), Some(6));
+        assert_eq!(queue.back().copied(), Some(9));
+    }
+
+    #[test]
+    fn cap_playback_queue_noop_when_under_cap() {
+        let mut queue: VecDeque<i16> = (0..3).collect();
+        cap_playback_queue(&mut queue, 4);
+        assert_eq!(queue.len(), 3);
+    }
+
+    #[test]
+    fn noop_backend_runs_and_stops() {
+        let mut backend = NoopAudioBackend::new();
+        let (tx_in, _rx_in) = std::sync::mpsc::channel();
+        let (_tx_out, rx_out): (Sender<AudioFrame>, Receiver<AudioFrame>) =
+            std::sync::mpsc::channel();
+        backend.start_capture(None, tx_in).unwrap();
+        backend.start_playback(None, rx_out).unwrap();
+        assert!(backend.is_running());
+        backend.stop();
+        assert!(!backend.is_running());
     }
 }

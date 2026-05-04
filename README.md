@@ -11,7 +11,7 @@ A lightweight Discord-like Rust application scaffold for Windows and Linux. It u
 - `light-discord-client`: native desktop client with connection, channel chat, online users, and voice room join/leave.
 - `light-discord-platform`: Windows/Linux-specific boundary for audio, notification, and packaging work.
 
-The current voice implementation has room state, UDP relay plumbing, and native input/output device selection. Microphone capture, speaker playback, Opus encoding, jitter buffering, and mute/deafen are the next production voice tasks.
+The current voice implementation has room state, UDP relay plumbing, native input/output device selection, and a raw PCM MVP that actually captures from the selected microphone, sends ~20 ms i16 PCM packets through the UDP relay, and plays the received PCM back through the selected output device. This is intentionally not production voice quality: it has no Opus encoding, no jitter buffer, and no echo/noise cancellation. Bandwidth is also high because the existing relay still serializes packets as JSON.
 
 Chat messages are persisted when `LD_DATABASE_URL` points at PostgreSQL. User-deleted messages are hidden from normal channel history and written to the admin-only audit log with a body snapshot. Visible chat history and audit log retention default to 30 days.
 
@@ -160,12 +160,13 @@ Voice device selection:
 
 - The `Voice` section lists `Input` and `Output` devices discovered through `cpal`.
 - Use `Refresh` after plugging in or removing an audio device.
-- `Join` starts the current voice room with the selected device ids. Real capture/playback is still a future backend task, so the current session continues to use UDP heartbeat packets only.
+- `Join` starts the current voice room with the selected device ids. The MVP captures raw i16 PCM from the chosen microphone, sends it as ~20 ms `VoicePacket` payloads over the existing UDP relay, and plays incoming PCM back through the chosen output device. Both an input and an output device are required for full duplex; if a device is missing or unsupported the worker logs to stderr and keeps the rest of the session alive.
 
 Current limitations:
 
 - Session tokens are not persisted to disk by the client yet.
-- Account management, password reset, role management, TLS setup, and production voice are still future work.
+- Account management, password reset, role management, TLS setup, and production-quality voice are still future work.
+- Voice transport is raw i16 PCM in JSON-encoded UDP packets. There is no Opus codec, no jitter buffer, no packet loss concealment, no mute/deafen, and no echo or noise cancellation, so quality and bandwidth are not production grade.
 - The client UI is intentionally minimal and aimed at validating the backend flow first.
 
 Japanese text rendering:

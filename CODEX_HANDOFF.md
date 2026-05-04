@@ -99,9 +99,11 @@ Admin:
 
 Voice:
 
-- Current voice support is room membership and UDP packet relay plumbing.
+- Current voice support is room membership and UDP packet relay plumbing plus a raw PCM MVP that captures and plays real audio.
 - Native input/output device selection is implemented through `cpal` in `light-discord-platform`.
-- Real microphone/speaker audio, Opus, jitter buffer, mute/deafen, and noise/echo handling are future work.
+- `CpalAudioBackend` builds default-config input/output streams, converts cpal sample formats to i16, downmixes capture to mono (channel count 1), and adapts channel counts for playback.
+- The voice worker chunks captured PCM into ~20 ms `VoicePacket` payloads (little-endian i16), sends them on the existing JSON-over-UDP relay, ignores echo of its own user_id, and feeds remote payloads to playback.
+- Opus, jitter buffer, packet loss concealment, mute/deafen, and noise/echo handling are still future work. Bandwidth is also not optimized: payloads remain JSON-encoded byte arrays.
 
 ## Current How To Use
 
@@ -225,8 +227,7 @@ At the time of this handoff, `main` was pushed to `origin/main`.
 - No password reset or account management UI.
 - No roles/permissions UI beyond basic admin flag.
 - No TLS/reverse proxy automation yet.
-- No real audio capture/playback yet.
-- No Opus codec or jitter buffer yet.
+- Voice is a raw PCM MVP only. There is no Opus codec, no jitter buffer, no packet loss concealment, no mute/deafen, and no echo or noise cancellation. Wire format is still JSON-encoded i16 little-endian bytes inside the existing `VoicePacket`, which is wasteful but adequate for local testing.
 - Native packaging for Windows/Linux has not been implemented.
 - Docker CLI is not installed in the current container, though Docker Compose files exist for host-side use.
 
@@ -251,10 +252,10 @@ This Docker container has `fonts-noto-cjk` installed for verification, and the d
 
 The client now enumerates native audio devices through `cpal`:
 
-- `crates/light-discord-platform/src/audio.rs` exposes `available_audio_devices`, `AudioDeviceList`, and `AudioDeviceSelection`.
+- `crates/light-discord-platform/src/audio.rs` exposes `available_audio_devices`, `AudioDeviceList`, `AudioDeviceSelection`, and the new `CpalAudioBackend` that implements the `AudioBackend` trait. `default-input` / `default-output` aliases route to the system default device; concrete ids are parsed via `cpal::DeviceId::from_str` with a string-comparison fallback.
+- Pure helpers in the same file (`adapt_channels`, `cap_playback_queue`, `encode_pcm_le`, `decode_pcm_le`) are unit tested.
 - `crates/light-discord-client/src/app.rs` shows `Input` and `Output` combo boxes in the `Voice` section.
-- `crates/light-discord-client/src/voice.rs` accepts the selected device ids when starting a voice session.
-- The current voice session still sends UDP heartbeat packets only; real capture/playback remains future work.
+- `crates/light-discord-client/src/voice.rs` runs the actual voice MVP. Its worker thread owns a `CpalAudioBackend`, opens a UDP socket with a 50 ms read timeout, slices captured PCM into ~20 ms chunks, sends each as a `VoicePacket`, ignores packets echoed back from its own `user_id`, and forwards remote PCM to the playback queue. An empty heartbeat packet is sent every 500 ms when nothing else has gone out so the relay still learns this client's address. Empty payloads are never fed to playback.
 
 Linux build dependency installed in this Docker container for verification:
 

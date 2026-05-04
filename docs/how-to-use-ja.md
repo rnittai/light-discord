@@ -158,9 +158,9 @@ cargo run -p light-discord-client
 - 削除したメッセージは通常のチャンネル履歴から消えます。
 - 削除内容は管理者専用の監査ログに本文 snapshot 付きで保存されます。
 
-## 8. ボイスの入力/出力デバイス選択
+## 8. ボイスの入力/出力デバイス選択と通話
 
-左サイドバーの `Voice` セクションで `Input` と `Output` を選択できます。デバイスを接続し直した場合は `Refresh` を押します。
+左サイドバーの `Voice` セクションで `Input` と `Output` を選択できます。デバイスを接続し直した場合は `Refresh` を押します。`Join` を押すと、選択したマイクからモノラル i16 PCM を約 20ms ごとに UDP リレーへ送り、受信した相手の PCM を選択した出力デバイスで再生します。デバイスが複数チャンネルを返す場合は自動的にモノラルへダウンミックスします。マイク入力と出力デバイスの両方を選択しておく必要があります。デバイスが利用できない場合は worker が stderr にエラーを出してセッションは維持しようとします。
 
 Linux でビルドする場合、`cpal` のために ALSA 開発パッケージが必要です。
 セットアップスクリプトを使うと自動でインストールできます。
@@ -179,7 +179,7 @@ scripts/setup-linux-dev-deps.sh
 | Arch / Manjaro | `sudo pacman -Sy --needed --noconfirm pkgconf alsa-lib` |
 | openSUSE / SLES | `sudo zypper --non-interactive install pkgconf-pkg-config alsa-devel` |
 
-現時点では、選択した device id を voice session に渡すところまで実装しています。実際のマイク入力、スピーカー出力、Opus、jitter buffer は今後の実装対象です。
+現時点での実装は MVP です。raw i16 PCM を JSON にエンコードした UDP パケットでそのまま送受信しています。Opus エンコード、jitter buffer、パケットロス補間、mute/deafen、エコー/ノイズ抑制はまだ入っていないので、音質と帯域は本番品質ではありません。
 
 ## 日本語が文字化けする場合
 
