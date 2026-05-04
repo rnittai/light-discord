@@ -163,17 +163,21 @@ cargo run -p light-discord-client
 左サイドバーの `Voice` セクションで `Input` と `Output` を選択できます。デバイスを接続し直した場合は `Refresh` を押します。
 
 Linux でビルドする場合、`cpal` のために ALSA 開発パッケージが必要です。
+セットアップスクリプトを使うと自動でインストールできます。
 
 ```bash
-# Debian / Ubuntu
-sudo apt-get install -y pkg-config libasound2-dev
-
-# Fedora
-sudo dnf install -y pkgconf-pkg-config alsa-lib-devel
-
-# Arch
-sudo pacman -S pkgconf alsa-lib
+scripts/setup-linux-dev-deps.sh
 ```
+
+スクリプトはディストロを検出し、必要に応じて sudo でパッケージをインストールして結果を確認します。
+手動でインストールする場合のパッケージ名は次のとおりです。
+
+| ディストロ | コマンド |
+|-----------|---------|
+| Debian / Ubuntu | `sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev` |
+| Fedora / RHEL / CentOS / Rocky / Alma | `sudo dnf install -y pkgconf-pkg-config alsa-lib-devel` |
+| Arch / Manjaro | `sudo pacman -Sy --needed --noconfirm pkgconf alsa-lib` |
+| openSUSE / SLES | `sudo zypper --non-interactive install pkgconf-pkg-config alsa-devel` |
 
 現時点では、選択した device id を voice session に渡すところまで実装しています。実際のマイク入力、スピーカー出力、Opus、jitter buffer は今後の実装対象です。
 

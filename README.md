@@ -21,18 +21,22 @@ Authentication is enforced when PostgreSQL is configured. The server supports in
 
 Install Rust stable. This workspace was verified with Rust 1.95.0.
 
-Linux builds that include the native audio device picker need ALSA development headers for `cpal`:
+Linux builds that include the native audio device picker need ALSA development headers for `cpal`.
+Run the setup script to install them automatically:
 
 ```bash
-# Debian / Ubuntu
-sudo apt-get install -y pkg-config libasound2-dev
-
-# Fedora
-sudo dnf install -y pkgconf-pkg-config alsa-lib-devel
-
-# Arch
-sudo pacman -S pkgconf alsa-lib
+scripts/setup-linux-dev-deps.sh
 ```
+
+The script detects your distro, installs the packages with sudo if needed, and verifies the result.
+If you prefer to install manually, the packages are:
+
+| Distro | Command |
+|--------|---------|
+| Debian / Ubuntu | `sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev` |
+| Fedora / RHEL / CentOS / Rocky / Alma | `sudo dnf install -y pkgconf-pkg-config alsa-lib-devel` |
+| Arch / Manjaro | `sudo pacman -Sy --needed --noconfirm pkgconf alsa-lib` |
+| openSUSE / SLES | `sudo zypper --non-interactive install pkgconf-pkg-config alsa-devel` |
 
 Start the server:
 

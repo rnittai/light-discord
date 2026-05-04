@@ -262,6 +262,17 @@ Linux build dependency installed in this Docker container for verification:
 apt-get install -y libasound2-dev
 ```
 
+A setup script is now available to handle this automatically on developer machines:
+
+```bash
+scripts/setup-linux-dev-deps.sh
+```
+
+The script supports Debian/Ubuntu, Fedora/RHEL/CentOS/Rocky/Alma, Arch/Manjaro, and openSUSE/SLES.
+It re-executes the install command via sudo when not running as root, then verifies that
+`pkg-config --exists alsa` succeeds before exiting. README.md and docs/how-to-use-ja.md
+both point to this script as the recommended first step for Linux builds.
+
 ## Good Next Tasks
 
 Suggested next development steps:
