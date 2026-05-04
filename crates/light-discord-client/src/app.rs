@@ -628,10 +628,14 @@ fn selected_device_label(
 }
 
 fn audio_device_label(device: &AudioDeviceInfo) -> String {
-    if device.is_default {
-        format!("{} (default)", device.name)
-    } else {
-        device.name.clone()
+    match (device.is_default, device.grouped_count > 1) {
+        (true, true) => format!(
+            "{} (default, {} variants)",
+            device.name, device.grouped_count
+        ),
+        (true, false) => format!("{} (default)", device.name),
+        (false, true) => format!("{} ({} variants)", device.name, device.grouped_count),
+        (false, false) => device.name.clone(),
     }
 }
 
