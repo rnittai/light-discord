@@ -26,3 +26,11 @@ Git workflow preference:
 - Commit completed work in coherent chunks.
 - Push after successful verification when remote access is available.
 - If push fails because authentication or network access is unavailable, keep the local commit and report the exact failure.
+
+AI workflow preference:
+
+- Codex should own overall design, task decomposition, sequencing, code review, verification decisions, and final integration.
+- For actual implementation work, Codex should delegate code-writing tasks to Claude Code workers when the tooling is available.
+- Choose the Claude Code model according to the implementation task complexity instead of using one fixed model for every task.
+- Codex should review Claude Code changes before committing, run the relevant tests/checks, and integrate or adjust the result as needed.
+- If Claude Code delegation is blocked by the environment, record the blocker clearly before falling back to direct implementation.

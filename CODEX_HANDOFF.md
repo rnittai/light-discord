@@ -46,6 +46,12 @@ The broad AutoAI workflow was attempted multiple times. It consistently blocked 
 
 Because of that, the implementation was completed manually in this repo.
 
+## AI Workflow Preference
+
+The user wants Codex to handle overall design, task decomposition, sequencing, review, verification decisions, and integration. Actual code-writing implementation work should be delegated to Claude Code workers when the tooling is available. Select the Claude Code model according to the task complexity rather than using one fixed model for every implementation task.
+
+If Claude Code delegation is blocked by the environment, document the blocker clearly before falling back to direct implementation. Codex should still review diffs, run relevant checks, and handle commits/pushes.
+
 ## Current Architecture
 
 Cargo workspace crates:
