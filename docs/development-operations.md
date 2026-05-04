@@ -33,6 +33,7 @@ AI workflow preference:
 
 - Codex should own overall design, task decomposition, sequencing, code review, verification decisions, and final integration.
 - For actual implementation work, Codex should delegate code-writing tasks to Claude Code workers when the tooling is available.
+- When a request contains multiple implementation areas, split the work into appropriately small Claude Code prompts and restart Claude Code between those prompts to reset context and reduce token usage.
 - Git operations should also be delegated to Claude Code workers when practical, with Codex retaining review and integration responsibility.
 - Choose the Claude Code model according to the implementation task complexity instead of using one fixed model for every task.
 - Codex should review Claude Code changes before committing, run the relevant tests/checks, and integrate or adjust the result as needed.

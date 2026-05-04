@@ -382,7 +382,9 @@ impl AudioBackend for CpalAudioBackend {
 
         // Background thread: pull AudioFrames off the channel and push i16 samples
         // (already adapted to the device channel count) into the bounded queue.
-        std::thread::spawn(move || feed_playback_queue(rx, queue_writer, device_channels));
+        std::thread::spawn(move || {
+            feed_playback_queue(rx, queue_writer, device_sample_rate, device_channels)
+        });
 
         let err_callback = |err| eprintln!("voice playback stream error: {err}");
 
@@ -491,17 +493,49 @@ where
     )
 }
 
+/// Prepare an `AudioFrame` for device playback.
+///
+/// Processing order (correct for arbitrary input rates and channel counts):
+///   1. Downmix multi-channel input to mono.
+///   2. Resample mono PCM from `frame.sample_rate` to `device_sample_rate`.
+///   3. Expand mono to `device_channels`.
+///
+/// This keeps resampling operating on the smallest buffer (mono) and ensures
+/// the output length matches what the device expects.
+pub(crate) fn prepare_playback_frame(
+    frame: &AudioFrame,
+    device_sample_rate: u32,
+    device_channels: u16,
+) -> Vec<i16> {
+    let mono = if frame.channels != 1 {
+        adapt_channels(&frame.pcm, frame.channels, 1)
+    } else {
+        frame.pcm.clone()
+    };
+    let resampled = if frame.sample_rate == 0 || frame.sample_rate == device_sample_rate {
+        mono
+    } else {
+        crate::voice::resample_linear_mono(&mono, frame.sample_rate, device_sample_rate)
+    };
+    if device_channels == 1 {
+        resampled
+    } else {
+        adapt_channels(&resampled, 1, device_channels)
+    }
+}
+
 fn feed_playback_queue(
     rx: Receiver<AudioFrame>,
     queue: Arc<Mutex<VecDeque<i16>>>,
+    device_sample_rate: u32,
     device_channels: u16,
 ) {
     loop {
         match rx.recv() {
             Ok(frame) => {
-                let adapted = adapt_channels(&frame.pcm, frame.channels, device_channels);
+                let prepared = prepare_playback_frame(&frame, device_sample_rate, device_channels);
                 if let Ok(mut guard) = queue.lock() {
-                    guard.extend(adapted);
+                    guard.extend(prepared);
                     let len = guard.len();
                     if len > PLAYBACK_QUEUE_CAP_SAMPLES {
                         let drop = len - PLAYBACK_QUEUE_CAP_SAMPLES;
@@ -830,6 +864,65 @@ mod tests {
         let mut queue: VecDeque<i16> = (0..3).collect();
         cap_playback_queue(&mut queue, 4);
         assert_eq!(queue.len(), 3);
+    }
+
+    #[test]
+    fn prepare_playback_passthrough_when_rates_and_channels_match() {
+        let frame = AudioFrame {
+            sample_rate: 48_000,
+            channels: 1,
+            pcm: vec![1_i16, 2, 3, 4],
+        };
+        let out = prepare_playback_frame(&frame, 48_000, 1);
+        assert_eq!(out, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn prepare_playback_resamples_44100_mono_to_48000_stereo() {
+        // 441 mono samples at 44100 Hz -> ~480 mono -> ~960 stereo samples
+        let pcm: Vec<i16> = (0..441).map(|i| (i * 10) as i16).collect();
+        let frame = AudioFrame {
+            sample_rate: 44_100,
+            channels: 1,
+            pcm,
+        };
+        let out = prepare_playback_frame(&frame, 48_000, 2);
+        // 480 resampled mono frames * 2 channels = 960 samples
+        assert_eq!(out.len(), 480 * 2);
+        // Each pair must be equal (mono duplicated to stereo).
+        for pair in out.chunks_exact(2) {
+            assert_eq!(pair[0], pair[1]);
+        }
+    }
+
+    #[test]
+    fn prepare_playback_downmixes_stereo_before_resampling() {
+        // Stereo 44100 Hz: 882 samples (441 frames * 2 channels)
+        // L=1000, R=3000 -> mono avg 2000 per frame
+        let pcm: Vec<i16> = (0..441).flat_map(|_| [1000_i16, 3000_i16]).collect();
+        let frame = AudioFrame {
+            sample_rate: 44_100,
+            channels: 2,
+            pcm,
+        };
+        let out = prepare_playback_frame(&frame, 48_000, 1);
+        // All mono samples should be the average 2000 (may vary slightly at boundaries
+        // due to interpolation, but the bulk should be 2000).
+        let bulk = &out[1..out.len() - 1];
+        for &s in bulk {
+            assert!((s - 2000).abs() <= 1, "expected ~2000 but got {s}");
+        }
+    }
+
+    #[test]
+    fn prepare_playback_zero_sample_rate_treated_as_passthrough() {
+        let frame = AudioFrame {
+            sample_rate: 0,
+            channels: 1,
+            pcm: vec![100_i16, 200, 300],
+        };
+        let out = prepare_playback_frame(&frame, 48_000, 1);
+        assert_eq!(out, vec![100, 200, 300]);
     }
 
     #[test]

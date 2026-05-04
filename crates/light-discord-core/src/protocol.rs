@@ -141,6 +141,10 @@ pub enum ServerFrame {
     },
 }
 
+/// Codec identifier carried in `VoicePacket::codec`.
+pub const VOICE_CODEC_PCM_S16LE: &str = "pcm_s16le";
+pub const VOICE_CODEC_OPUS: &str = "opus";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VoicePacket {
     pub user_id: UserId,
@@ -148,7 +152,20 @@ pub struct VoicePacket {
     pub sequence: u64,
     pub sample_rate: u32,
     pub channels: u16,
+    /// Codec identifier. Defaults to `pcm_s16le` for backward compatibility
+    /// with old senders that did not include this field.
+    #[serde(default = "default_voice_codec")]
+    pub codec: String,
+    /// Samples per channel encoded in `payload`. Useful for Opus PLC where the
+    /// receiver needs to know the frame size up front. Zero means "unspecified"
+    /// (e.g. heartbeats or legacy raw PCM payloads).
+    #[serde(default)]
+    pub frame_samples: u32,
     pub payload: Vec<u8>,
+}
+
+fn default_voice_codec() -> String {
+    VOICE_CODEC_PCM_S16LE.to_owned()
 }
 
 pub fn now_unix_ms() -> u64 {
@@ -195,6 +212,8 @@ mod tests {
             sequence: 7,
             sample_rate: 48_000,
             channels: 1,
+            codec: VOICE_CODEC_OPUS.to_owned(),
+            frame_samples: 960,
             payload: vec![1, 2, 3, 4],
         };
 
@@ -202,6 +221,16 @@ mod tests {
         let decoded = serde_json::from_slice::<VoicePacket>(&json).unwrap();
 
         assert_eq!(decoded, packet);
+    }
+
+    #[test]
+    fn voice_packet_legacy_payload_defaults_to_pcm_codec() {
+        // Old clients did not emit `codec` or `frame_samples`. The new fields
+        // must be serde-defaulted so the relay/server keeps parsing them.
+        let json = br#"{"user_id":"u","room_id":"r","sequence":1,"sample_rate":48000,"channels":1,"payload":[]}"#;
+        let decoded = serde_json::from_slice::<VoicePacket>(json).unwrap();
+        assert_eq!(decoded.codec, VOICE_CODEC_PCM_S16LE);
+        assert_eq!(decoded.frame_samples, 0);
     }
 
     #[test]

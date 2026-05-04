@@ -11,7 +11,9 @@ A lightweight Discord-like Rust application scaffold for Windows and Linux. It u
 - `light-discord-client`: native desktop client with connection, channel chat, online users, and voice room join/leave.
 - `light-discord-platform`: Windows/Linux-specific boundary for audio, notification, and packaging work.
 
-The current voice implementation has room state, UDP relay plumbing, native input/output device selection, and a raw PCM MVP that actually captures from the selected microphone, sends ~20 ms i16 PCM packets through the UDP relay, and plays the received PCM back through the selected output device. This is intentionally not production voice quality: it has no Opus encoding, no jitter buffer, and no echo/noise cancellation. Bandwidth is also high because the existing relay still serializes packets as JSON.
+The current voice implementation has room state, UDP relay plumbing, native input/output device selection, and a production-style voice path: captured microphone audio is resampled to 48 kHz mono, run through a high-pass + RMS noise gate + cheap mic-ducking DSP path. Frames where the noise gate is closed are not transmitted (suppressed at the source). Open-gate frames are encoded as 20 ms Opus frames (with in-band FEC enabled) and sent through the UDP relay as `VoicePacket`s with `codec="opus"`. On the receiving side a per-remote jitter buffer uses Opus PLC and FEC to mask packet loss. Mute and deafen toggles in the client gate the microphone and remote playback respectively, while still keeping the voice-room heartbeat alive so the UDP relay continues to learn the client's address. The voice-user list highlights the active speaker(s) — including the local user — only for actually transmitted/audible frames.
+
+This is voice quality suitable for friends-only deployments, not a Discord-replacement-grade stack: there is no real acoustic echo cancellation (only a simple mic-ducking heuristic), no adaptive bitrate, no SRTP/encryption, no Opus DTX (silence suppression relies on the RMS noise gate, not the codec), and the relay envelope is still JSON for protocol simplicity. libopus is built and linked statically through `audiopus_sys`'s `static` feature so Windows and Linux builds do not require a system libopus.
 
 Chat messages are persisted when `LD_DATABASE_URL` points at PostgreSQL. User-deleted messages are hidden from normal channel history and written to the admin-only audit log with a body snapshot. Visible chat history and audit log retention default to 30 days.
 
@@ -21,7 +23,8 @@ Authentication is enforced when PostgreSQL is configured. The server supports in
 
 Install Rust stable. This workspace was verified with Rust 1.95.0.
 
-Linux builds that include the native audio device picker need ALSA development headers for `cpal`.
+Linux builds need ALSA development headers (for `cpal`) and CMake plus a C
+toolchain (for the bundled libopus that `audiopus_sys` builds statically).
 Run the setup script to install them automatically:
 
 ```bash
@@ -33,10 +36,14 @@ If you prefer to install manually, the packages are:
 
 | Distro | Command |
 |--------|---------|
-| Debian / Ubuntu | `sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev` |
-| Fedora / RHEL / CentOS / Rocky / Alma | `sudo dnf install -y pkgconf-pkg-config alsa-lib-devel` |
-| Arch / Manjaro | `sudo pacman -Sy --needed --noconfirm pkgconf alsa-lib` |
-| openSUSE / SLES | `sudo zypper --non-interactive install pkgconf-pkg-config alsa-devel` |
+| Debian / Ubuntu | `sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev cmake build-essential` |
+| Fedora / RHEL / CentOS / Rocky / Alma | `sudo dnf install -y pkgconf-pkg-config alsa-lib-devel cmake gcc gcc-c++ make` |
+| Arch / Manjaro | `sudo pacman -Sy --needed --noconfirm pkgconf alsa-lib cmake base-devel` |
+| openSUSE / SLES | `sudo zypper --non-interactive install pkgconf-pkg-config alsa-devel cmake gcc gcc-c++ make` |
+
+Windows builds need only the standard MSVC or GNU toolchain that the Rust
+installer sets up; CMake comes bundled with most Visual Studio installs and
+`audiopus_sys` will use it to build libopus from source.
 
 Start the server:
 
@@ -156,17 +163,19 @@ cargo run -p light-discord-client
 
 7. To inspect deleted-message audit records, connect as admin and press `Audit` in the admin panel.
 
-Voice device selection:
+Voice device selection and controls:
 
 - The `Voice` section lists `Input` and `Output` devices discovered through `cpal`.
 - Use `Refresh` after plugging in or removing an audio device.
-- `Join` starts the current voice room with the selected device ids. The MVP captures raw i16 PCM from the chosen microphone, sends it as ~20 ms `VoicePacket` payloads over the existing UDP relay, and plays incoming PCM back through the chosen output device. Both an input and an output device are required for full duplex; if a device is missing or unsupported the worker logs to stderr and keeps the rest of the session alive.
+- `Join` starts the current voice room. The worker downmixes capture to mono, resamples to 48 kHz, runs a high-pass filter and RMS noise gate. Frames where the noise gate is closed are suppressed and not transmitted (Opus DTX is not used). Open-gate frames are encoded as 20 ms Opus frames with in-band FEC enabled and shipped as `VoicePacket`s with `codec="opus"`. Incoming packets go through a per-remote jitter buffer (~60 ms target depth) and are decoded with PLC/FEC for masking packet loss.
+- `Mute mic` stops outgoing audio while keeping the voice-room heartbeat. `Deafen` stops remote playback (and implicitly mutes the mic).
+- The voice user list shows a green `*` marker and name for users currently emitting audible audio, including yourself.
 
 Current limitations:
 
 - Session tokens are not persisted to disk by the client yet.
-- Account management, password reset, role management, TLS setup, and production-quality voice are still future work.
-- Voice transport is raw i16 PCM in JSON-encoded UDP packets. There is no Opus codec, no jitter buffer, no packet loss concealment, no mute/deafen, and no echo or noise cancellation, so quality and bandwidth are not production grade.
+- Account management, password reset, role management, TLS setup are still future work.
+- Voice transport packets are still wrapped in JSON over UDP for protocol simplicity. There is no SRTP/encryption, no Opus DTX (closed-gate frames are suppressed by the RMS noise gate at the source, not by the codec), no adaptive bitrate, and no real acoustic echo cancellation — only a simple mic-ducking heuristic that attenuates the microphone when remote playback is loud. The voice path is fine for friend-group calls but is not Discord-grade.
 - The client UI is intentionally minimal and aimed at validating the backend flow first.
 
 Japanese text rendering:

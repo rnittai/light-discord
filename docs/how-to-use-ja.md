@@ -160,9 +160,19 @@ cargo run -p light-discord-client
 
 ## 8. ボイスの入力/出力デバイス選択と通話
 
-左サイドバーの `Voice` セクションで `Input` と `Output` を選択できます。デバイスを接続し直した場合は `Refresh` を押します。`Join` を押すと、選択したマイクからモノラル i16 PCM を約 20ms ごとに UDP リレーへ送り、受信した相手の PCM を選択した出力デバイスで再生します。デバイスが複数チャンネルを返す場合は自動的にモノラルへダウンミックスします。マイク入力と出力デバイスの両方を選択しておく必要があります。デバイスが利用できない場合は worker が stderr にエラーを出してセッションは維持しようとします。
+左サイドバーの `Voice` セクションで `Input` と `Output` を選択できます。デバイスを接続し直した場合は `Refresh` を押します。`Join` を押すと音声ワーカーが起動し、次の処理が走ります。
 
-Linux でビルドする場合、`cpal` のために ALSA 開発パッケージが必要です。
+- マイクからの入力をモノラル i16 へダウンミックスし、48 kHz へリサンプリング
+- ハイパスフィルタ (約 100 Hz) と RMS ベースのノイズゲートを通す。ゲートが閉じているフレームは送信しない (Opus DTX は使用していない)
+- 受信側の出力が大きいときはマイクを軽く減衰させる簡易エコー抑制 (本格的な AEC ではありません)
+- 20 ms フレーム (960 サンプル) 単位で Opus 音声へエンコード (32 kbps、in-band FEC 有効、想定パケットロス 10%)
+- `VoicePacket { codec: "opus", frame_samples: 960, ... }` として既存の UDP リレーへ送信
+
+受信側はユーザーごとに jitter buffer (目標 ~60 ms = 3 パケット) を持ち、Opus PLC と FEC でパケットロスを補間しながら 48 kHz モノラルでデコードして、出力デバイスのサンプルレート/チャンネル数へ自動で適合させます。
+
+`Mute mic` を押すとマイクからの音声送信は止まりますが、相手にはハートビートが送られ続けるため voice room には残ります。`Deafen` を押すと受信した音声の再生を完全に止めます (自動的にマイクもミュートされます)。voice user list では、いま音声を出しているユーザー (自分を含む) は緑色の `*` マーカー付きで強調表示されます。
+
+Linux でビルドする場合、`cpal` のために ALSA 開発パッケージと、libopus を静的にビルドするために CMake と C/C++ ツールチェインが必要です。
 セットアップスクリプトを使うと自動でインストールできます。
 
 ```bash
@@ -174,12 +184,12 @@ scripts/setup-linux-dev-deps.sh
 
 | ディストロ | コマンド |
 |-----------|---------|
-| Debian / Ubuntu | `sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev` |
-| Fedora / RHEL / CentOS / Rocky / Alma | `sudo dnf install -y pkgconf-pkg-config alsa-lib-devel` |
-| Arch / Manjaro | `sudo pacman -Sy --needed --noconfirm pkgconf alsa-lib` |
-| openSUSE / SLES | `sudo zypper --non-interactive install pkgconf-pkg-config alsa-devel` |
+| Debian / Ubuntu | `sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev cmake build-essential` |
+| Fedora / RHEL / CentOS / Rocky / Alma | `sudo dnf install -y pkgconf-pkg-config alsa-lib-devel cmake gcc gcc-c++ make` |
+| Arch / Manjaro | `sudo pacman -Sy --needed --noconfirm pkgconf alsa-lib cmake base-devel` |
+| openSUSE / SLES | `sudo zypper --non-interactive install pkgconf-pkg-config alsa-devel cmake gcc gcc-c++ make` |
 
-現時点での実装は MVP です。raw i16 PCM を JSON にエンコードした UDP パケットでそのまま送受信しています。Opus エンコード、jitter buffer、パケットロス補間、mute/deafen、エコー/ノイズ抑制はまだ入っていないので、音質と帯域は本番品質ではありません。
+現時点の制約として、UDP の中身は依然として `VoicePacket` を JSON でくるんだ形式 (`codec` フィールドで Opus / 旧 PCM を区別) です。SRTP/暗号化、可変ビットレート、Opus DTX (無音抑制は RMS ノイズゲートで行い codec では行わない)、本格的な AEC、サーバ側の codec 認識は実装していないため、本番グレードの voice ではありませんが、自己ホストでの友達通話には十分使える品質を狙っています。
 
 ## 日本語が文字化けする場合
 

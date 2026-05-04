@@ -6,11 +6,25 @@ if [ "$(uname -s)" != "Linux" ]; then
     exit 0
 fi
 
-# Already satisfied - nothing to do.
-if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists alsa 2>/dev/null; then
-    echo "ALSA pkg-config entry found."
+# We need ALSA dev headers (cpal capture/playback) AND cmake + a C toolchain
+# (audiopus_sys builds libopus from source via CMake when the `static` feature
+# is enabled). pkg-config helps cargo locate ALSA. If everything is already
+# present we have nothing to do.
+need_install=0
+if ! command -v pkg-config >/dev/null 2>&1 || ! pkg-config --exists alsa 2>/dev/null; then
+    need_install=1
+fi
+if ! command -v cmake >/dev/null 2>&1; then
+    need_install=1
+fi
+if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
+    need_install=1
+fi
+if [ "$need_install" -eq 0 ]; then
+    echo "ALSA pkg-config entry found and cmake / C toolchain present."
     echo "  CFLAGS : $(pkg-config --cflags alsa)"
     echo "  LIBS   : $(pkg-config --libs alsa)"
+    echo "  cmake  : $(cmake --version | head -1)"
     exit 0
 fi
 
@@ -56,7 +70,7 @@ run_install() {
     fi
 }
 
-echo "Installing ALSA development dependencies..."
+echo "Installing ALSA + libopus build dependencies..."
 
 case "$family" in
     debian)
@@ -65,13 +79,13 @@ case "$family" in
             exit 1
         fi
         run_install apt-get update
-        run_install apt-get install -y pkg-config libasound2-dev
+        run_install apt-get install -y pkg-config libasound2-dev cmake build-essential
         ;;
     fedora)
         if command -v dnf >/dev/null 2>&1; then
-            run_install dnf install -y pkgconf-pkg-config alsa-lib-devel
+            run_install dnf install -y pkgconf-pkg-config alsa-lib-devel cmake gcc gcc-c++ make
         elif command -v yum >/dev/null 2>&1; then
-            run_install yum install -y pkgconf-pkg-config alsa-lib-devel
+            run_install yum install -y pkgconf-pkg-config alsa-lib-devel cmake gcc gcc-c++ make
         else
             echo "Error: neither dnf nor yum found on a Fedora-family system."
             exit 1
@@ -82,18 +96,19 @@ case "$family" in
             echo "Error: pacman not found on an Arch-family system."
             exit 1
         fi
-        run_install pacman -Sy --needed --noconfirm pkgconf alsa-lib
+        run_install pacman -Sy --needed --noconfirm pkgconf alsa-lib cmake base-devel
         ;;
     suse)
         if ! command -v zypper >/dev/null 2>&1; then
             echo "Error: zypper not found on an openSUSE-family system."
             exit 1
         fi
-        run_install zypper --non-interactive install pkgconf-pkg-config alsa-devel
+        run_install zypper --non-interactive install pkgconf-pkg-config alsa-devel cmake gcc gcc-c++ make
         ;;
     *)
         echo "Unsupported distro (ID='$ID' ID_LIKE='$ID_LIKE')."
-        echo "Install pkg-config and ALSA development headers manually, then re-run."
+        echo "Install pkg-config, ALSA development headers, cmake, and a C/C++"
+        echo "toolchain manually, then re-run."
         exit 1
         ;;
 esac
@@ -106,7 +121,16 @@ if ! pkg-config --exists alsa 2>/dev/null; then
     pkg-config --variable pc_path pkg-config 2>/dev/null || true
     exit 1
 fi
+if ! command -v cmake >/dev/null 2>&1; then
+    echo "Error: cmake is still missing after installation."
+    exit 1
+fi
+if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
+    echo "Error: a C compiler (cc/gcc) is still missing after installation."
+    exit 1
+fi
 
-echo "Done. ALSA development headers are ready."
+echo "Done. ALSA development headers, cmake, and C toolchain are ready."
 echo "  CFLAGS : $(pkg-config --cflags alsa)"
 echo "  LIBS   : $(pkg-config --libs alsa)"
+echo "  cmake  : $(cmake --version | head -1)"

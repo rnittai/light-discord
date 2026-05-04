@@ -7,9 +7,14 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# audiopus_sys must be a direct dep here so the `static` feature is activated,
+# which causes libopus to be built and linked statically for self-contained
+# Windows/Linux binaries.
+audiopus_sys.workspace = true
 eframe.workspace = true
 egui.workspace = true
 light-discord-core = { path = "../light-discord-core" }
 light-discord-platform = { path = "../light-discord-platform" }
+opus.workspace = true
 serde_json.workspace = true
 

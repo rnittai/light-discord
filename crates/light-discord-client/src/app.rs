@@ -1,4 +1,9 @@
-use crate::{fonts, net::ClientEvent, net::NetworkHandle, voice::VoiceSession};
+use crate::{
+    fonts,
+    net::ClientEvent,
+    net::NetworkHandle,
+    voice::{VoiceSession, VoiceShared},
+};
 use eframe::egui;
 use light_discord_core::{
     AuditLogSummary, ChatMessage, ClientFrame, ServerFrame, UserSummary, VoiceUser,
@@ -7,6 +12,7 @@ use light_discord_platform::{
     available_audio_devices, platform_info, AudioDeviceInfo, AudioDeviceList, AudioDeviceSelection,
     PlatformInfo,
 };
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AuthMode {
@@ -43,6 +49,9 @@ pub struct LightDiscordApp {
     audio_device_status: String,
     network: Option<NetworkHandle>,
     voice: VoiceSession,
+    voice_shared: Arc<VoiceShared>,
+    voice_muted: bool,
+    voice_deafened: bool,
     platform: PlatformInfo,
 }
 
@@ -86,6 +95,9 @@ impl LightDiscordApp {
             audio_device_status,
             network: None,
             voice: VoiceSession::default(),
+            voice_shared: VoiceShared::new(),
+            voice_muted: false,
+            voice_deafened: false,
             platform: platform_info(),
         }
     }
@@ -190,6 +202,10 @@ impl LightDiscordApp {
         network.send(ClientFrame::JoinVoice {
             room_id: self.voice_room_id.clone(),
         });
+        // Push current toggle state into the shared bag before the worker
+        // starts so it picks up the user's previous mute/deafen choice.
+        self.voice_shared.set_muted(self.voice_muted);
+        self.voice_shared.set_deafened(self.voice_deafened);
         self.voice.start(
             udp_addr,
             user_id,
@@ -198,6 +214,7 @@ impl LightDiscordApp {
                 input_device_id: self.selected_input_device_id.clone(),
                 output_device_id: self.selected_output_device_id.clone(),
             },
+            Arc::clone(&self.voice_shared),
         );
     }
 
@@ -443,9 +460,41 @@ impl eframe::App for LightDiscordApp {
                         self.refresh_audio_devices();
                     }
                 });
+                ui.horizontal(|ui| {
+                    if ui.toggle_value(&mut self.voice_muted, "Mute mic").changed() {
+                        self.voice_shared.set_muted(self.voice_muted);
+                    }
+                    if ui
+                        .toggle_value(&mut self.voice_deafened, "Deafen")
+                        .changed()
+                    {
+                        // Deafening implies you can't hear anything; we also
+                        // mute the mic to match user expectations from other
+                        // voice apps.
+                        self.voice_shared.set_deafened(self.voice_deafened);
+                        if self.voice_deafened && !self.voice_muted {
+                            self.voice_muted = true;
+                            self.voice_shared.set_muted(true);
+                        }
+                    }
+                });
                 ui.small(&self.audio_device_status);
+                let local_user_id = self.user_id.as_deref();
                 for user in &self.voice_users {
-                    ui.label(format!("- {}", user.display_name));
+                    let active = self.voice_shared.is_active(&user.user_id);
+                    let is_local = local_user_id == Some(user.user_id.as_str());
+                    let mut text = egui::RichText::new(format!(
+                        "{} {}",
+                        if active { "*" } else { "-" },
+                        user.display_name
+                    ));
+                    if active {
+                        text = text.color(egui::Color32::from_rgb(80, 200, 120)).strong();
+                    }
+                    if is_local {
+                        text = text.italics();
+                    }
+                    ui.label(text);
                 }
 
                 ui.separator();

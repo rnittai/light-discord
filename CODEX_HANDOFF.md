@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-05-04.
+Last updated: 2026-05-05.
 
 This file summarizes the conversation, decisions, implementation state, and operational assumptions so a fresh Codex session can continue without rereading the whole chat.
 
@@ -48,7 +48,7 @@ Because of that, the implementation was completed manually in this repo.
 
 ## AI Workflow Preference
 
-The user wants Codex to handle overall design, task decomposition, sequencing, review, verification decisions, and integration. Actual code-writing implementation work should be delegated to Claude Code workers when the tooling is available. Git operations should also be delegated to Claude Code when practical, including `git status`, `git add`, `git commit`, and `git push`; Codex should decide the checkpoint/scope and review the resulting repository state. Select the Claude Code model according to the task complexity rather than using one fixed model for every implementation task.
+The user wants Codex to handle overall design, task decomposition, sequencing, review, verification decisions, and integration. Actual code-writing implementation work should be delegated to Claude Code workers when the tooling is available. When a request spans multiple implementation areas, split it into appropriately small Claude Code prompts and restart Claude Code between prompts to reset context and reduce token usage. Git operations should also be delegated to Claude Code when practical, including `git status`, `git add`, `git commit`, and `git push`; Codex should decide the checkpoint/scope and review the resulting repository state. Select the Claude Code model according to the task complexity rather than using one fixed model for every implementation task.
 
 If Claude Code delegation is blocked by the environment, document the blocker clearly before falling back to direct implementation. Codex should still review diffs, run relevant checks, and preserve task-sized commits/pushes.
 
@@ -99,11 +99,13 @@ Admin:
 
 Voice:
 
-- Current voice support is room membership and UDP packet relay plumbing plus a raw PCM MVP that captures and plays real audio.
-- Native input/output device selection is implemented through `cpal` in `light-discord-platform`.
-- `CpalAudioBackend` builds default-config input/output streams, converts cpal sample formats to i16, downmixes capture to mono (channel count 1), and adapts channel counts for playback.
-- The voice worker chunks captured PCM into ~20 ms `VoicePacket` payloads (little-endian i16), sends them on the existing JSON-over-UDP relay, ignores echo of its own user_id, and feeds remote payloads to playback.
-- Opus, jitter buffer, packet loss concealment, mute/deafen, and noise/echo handling are still future work. Bandwidth is also not optimized: payloads remain JSON-encoded byte arrays.
+- Voice now runs through Opus 48 kHz mono 20 ms frames (960 samples per packet) with in-band FEC enabled and a `set_packet_loss_perc` hint of 10%. libopus is built statically via `audiopus_sys`'s `static` feature so no system libopus is required on Windows or Linux.
+- The on-the-wire `VoicePacket` carries `codec` ("opus" or legacy "pcm_s16le") and `frame_samples` fields. Both are serde-defaulted so old senders continue to deserialize as PCM. The relay simply forwards packets and is unaware of the codec.
+- `CpalAudioBackend` (in `light-discord-platform`) still owns the cpal capture/playback streams. Capture is downmixed to mono. Playback resamples and channel-adapts incoming 48 kHz mono frames to whatever the output device wants.
+- `light-discord-platform/src/voice.rs` provides the pure DSP/protocol helpers: a linear mono resampler, a single-pole high-pass filter, an RMS noise gate with hangover, a per-remote-user `JitterBuffer` that emits packets in sequence and reports `JitterPop::Lost { next_payload }` so the decoder can use Opus FEC, plus the cheap mic-ducking helper. All of these have unit tests.
+- The client voice worker (`crates/light-discord-client/src/voice.rs`) wires capture -> highpass -> noise gate -> echo duck -> Opus encode -> UDP send, and UDP recv -> jitter buffer -> Opus decode (with PLC/FEC for losses) -> playback. Closed-gate frames are suppressed and not transmitted (Opus DTX is not used). Heartbeat packets carry the current sequence number but do not advance it; only transmitted audio frames increment the sequence. A `VoiceShared` (`Arc<...>`) carries the mute/deafen toggles and the active-speaker timestamps shared with the UI; active-speaker is only marked for actually transmitted frames.
+- The egui client now exposes `Mute mic` and `Deafen` toggles in the Voice panel and highlights the active speaker(s) in the voice user list — including the local user.
+- Limitations: simple mic-ducking is *not* AEC. There is no SRTP, no DTX, no adaptive bitrate, and the JSON envelope is still in use. The server is unaware of codecs and just relays bytes.
 
 ## Current How To Use
 
@@ -227,7 +229,7 @@ At the time of this handoff, `main` was pushed to `origin/main`.
 - No password reset or account management UI.
 - No roles/permissions UI beyond basic admin flag.
 - No TLS/reverse proxy automation yet.
-- Voice is a raw PCM MVP only. There is no Opus codec, no jitter buffer, no packet loss concealment, no mute/deafen, and no echo or noise cancellation. Wire format is still JSON-encoded i16 little-endian bytes inside the existing `VoicePacket`, which is wasteful but adequate for local testing.
+- Voice runs Opus 48 kHz mono 20 ms with PLC/FEC and a jitter buffer; mute/deafen toggles and active-speaker highlighting are wired up. Closed-gate frames are suppressed at the source (Opus DTX is not used). Echo handling is a simple ducking heuristic, not full AEC. The wire format still wraps the Opus payload in JSON (`VoicePacket { codec: "opus", frame_samples: 960, ... }`) which is wasteful on bandwidth but keeps the relay codec-agnostic.
 - Native packaging for Windows/Linux has not been implemented.
 - Docker CLI is not installed in the current container, though Docker Compose files exist for host-side use.
 
@@ -255,15 +257,18 @@ The client now enumerates native audio devices through `cpal`:
 - `crates/light-discord-platform/src/audio.rs` exposes `available_audio_devices`, `AudioDeviceList`, `AudioDeviceSelection`, and the new `CpalAudioBackend` that implements the `AudioBackend` trait. `default-input` / `default-output` aliases route to the system default device; concrete ids are parsed via `cpal::DeviceId::from_str` with a string-comparison fallback.
 - Pure helpers in the same file (`adapt_channels`, `cap_playback_queue`, `encode_pcm_le`, `decode_pcm_le`) are unit tested.
 - `crates/light-discord-client/src/app.rs` shows `Input` and `Output` combo boxes in the `Voice` section.
-- `crates/light-discord-client/src/voice.rs` runs the actual voice MVP. Its worker thread owns a `CpalAudioBackend`, opens a UDP socket with a 50 ms read timeout, slices captured PCM into ~20 ms chunks, sends each as a `VoicePacket`, ignores packets echoed back from its own `user_id`, and forwards remote PCM to the playback queue. An empty heartbeat packet is sent every 500 ms when nothing else has gone out so the relay still learns this client's address. Empty payloads are never fed to playback.
+- `crates/light-discord-client/src/voice.rs` runs the actual voice MVP. Its worker thread owns a `CpalAudioBackend`, opens a UDP socket with a 20 ms read timeout, resamples captured audio to 48 kHz and slices it into 20 ms Opus frames (960 samples), encodes each with the Opus encoder, and sends it as a `VoicePacket`. Received Opus packets from remote users are fed into per-user jitter buffers, then Opus-decoded with PLC or in-band FEC for losses, and sent to the playback queue. Own echoed packets and empty heartbeats are discarded. An empty heartbeat packet is sent every 500 ms when nothing else has gone out so the relay still learns this client's address.
 
-Linux build dependency installed in this Docker container for verification:
+Linux build dependencies installed in this Docker container for verification:
 
 ```bash
-apt-get install -y libasound2-dev
+apt-get install -y libasound2-dev cmake build-essential
 ```
 
-A setup script is now available to handle this automatically on developer machines:
+`cmake` and a C/C++ toolchain are required because `audiopus_sys` builds the
+bundled libopus from source when the `static` feature is enabled.
+
+A setup script handles this automatically on developer machines:
 
 ```bash
 scripts/setup-linux-dev-deps.sh
@@ -271,8 +276,9 @@ scripts/setup-linux-dev-deps.sh
 
 The script supports Debian/Ubuntu, Fedora/RHEL/CentOS/Rocky/Alma, Arch/Manjaro, and openSUSE/SLES.
 It re-executes the install command via sudo when not running as root, then verifies that
-`pkg-config --exists alsa` succeeds before exiting. README.md and docs/how-to-use-ja.md
-both point to this script as the recommended first step for Linux builds.
+`pkg-config --exists alsa`, `cmake`, and a C compiler are all present before exiting.
+README.md and docs/how-to-use-ja.md both point to this script as the recommended first
+step for Linux builds.
 
 ## Good Next Tasks
 
@@ -282,7 +288,7 @@ Suggested next development steps:
 2. Add a small admin/account management UI.
 3. Add role/channel permission model.
 4. Add TLS/reverse-proxy deployment guide for self-hosting.
-5. Implement real voice: `cpal` capture/playback streams, Opus encode/decode, jitter buffer.
+5. Real AEC (with playback reference signal), DTX, adaptive bitrate, and a binary voice envelope to replace the JSON wrapping.
 6. Add PostgreSQL cleanup/migration tests and reset helpers for local DB.
 7. Add packaging scripts for Windows and Linux.
 
