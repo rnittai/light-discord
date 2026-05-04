@@ -17,6 +17,7 @@ rust-version = "1.95"
 [workspace.dependencies]
 anyhow = "1"
 argon2 = "0.5"
+cpal = "0.17"
 eframe = "0.27"
 egui = "0.27"
 password-hash = { version = "0.5", features = ["rand_core"] }

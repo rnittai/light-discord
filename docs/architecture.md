@@ -16,7 +16,7 @@ Light Discord is split into four Rust crates so Windows and Linux support can sh
 - `src/os/linux.rs`: Linux-specific integration notes for PipeWire/PulseAudio/ALSA, freedesktop notifications, and packaging.
 - `src/os/windows.rs`: Windows-specific integration notes for WASAPI, toast notifications, and MSI/portable packaging.
 
-The current voice path implements room membership and UDP packet relay. The audio backend trait is present, and the default implementation is a no-op so the workspace can be developed without committing to a codec or OS audio API too early. A production voice implementation should add a `cpal` capture/playback backend and Opus encoding behind this boundary.
+The current voice path implements room membership, UDP packet relay, and `cpal` device enumeration for native input/output selection. The audio backend trait is present, and the default implementation is a no-op so the workspace can be developed without committing to a codec or stream pipeline too early. A production voice implementation should add `cpal` capture/playback streams, Opus encoding, and jitter buffering behind this boundary.
 
 ## Persistence and Audit Boundary
 

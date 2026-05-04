@@ -94,7 +94,8 @@ Admin:
 Voice:
 
 - Current voice support is room membership and UDP packet relay plumbing.
-- Real microphone/speaker audio, Opus, jitter buffer, mute/deafen, device selection, and noise/echo handling are future work.
+- Native input/output device selection is implemented through `cpal` in `light-discord-platform`.
+- Real microphone/speaker audio, Opus, jitter buffer, mute/deafen, and noise/echo handling are future work.
 
 ## Current How To Use
 
@@ -110,6 +111,7 @@ In the client:
 - Select `Dev`.
 - Enter any display name.
 - Press `Connect`.
+- Select `Voice` `Input` / `Output` devices in the left sidebar if audio devices are available.
 
 PostgreSQL self-hosted mode:
 
@@ -239,6 +241,21 @@ This Docker container has `fonts-noto-cjk` installed for verification, and the d
 /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 ```
 
+## Voice Device Selection
+
+The client now enumerates native audio devices through `cpal`:
+
+- `crates/light-discord-platform/src/audio.rs` exposes `available_audio_devices`, `AudioDeviceList`, and `AudioDeviceSelection`.
+- `crates/light-discord-client/src/app.rs` shows `Input` and `Output` combo boxes in the `Voice` section.
+- `crates/light-discord-client/src/voice.rs` accepts the selected device ids when starting a voice session.
+- The current voice session still sends UDP heartbeat packets only; real capture/playback remains future work.
+
+Linux build dependency installed in this Docker container for verification:
+
+```bash
+apt-get install -y libasound2-dev
+```
+
 ## Good Next Tasks
 
 Suggested next development steps:
@@ -247,7 +264,7 @@ Suggested next development steps:
 2. Add a small admin/account management UI.
 3. Add role/channel permission model.
 4. Add TLS/reverse-proxy deployment guide for self-hosting.
-5. Implement real voice: `cpal` audio backend, Opus encode/decode, jitter buffer.
+5. Implement real voice: `cpal` capture/playback streams, Opus encode/decode, jitter buffer.
 6. Add PostgreSQL cleanup/migration tests and reset helpers for local DB.
 7. Add packaging scripts for Windows and Linux.
 

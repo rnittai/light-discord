@@ -11,7 +11,7 @@ A lightweight Discord-like Rust application scaffold for Windows and Linux. It u
 - `light-discord-client`: native desktop client with connection, channel chat, online users, and voice room join/leave.
 - `light-discord-platform`: Windows/Linux-specific boundary for audio, notification, and packaging work.
 
-The current voice implementation has room state and UDP relay plumbing. Microphone capture, speaker playback, Opus encoding, jitter buffering, mute/deafen, and device selection are the next production voice tasks.
+The current voice implementation has room state, UDP relay plumbing, and native input/output device selection. Microphone capture, speaker playback, Opus encoding, jitter buffering, and mute/deafen are the next production voice tasks.
 
 Chat messages are persisted when `LD_DATABASE_URL` points at PostgreSQL. User-deleted messages are hidden from normal channel history and written to the admin-only audit log with a body snapshot. Visible chat history and audit log retention default to 30 days.
 
@@ -20,6 +20,19 @@ Authentication is enforced when PostgreSQL is configured. The server supports in
 ## Run
 
 Install Rust stable. This workspace was verified with Rust 1.95.0.
+
+Linux builds that include the native audio device picker need ALSA development headers for `cpal`:
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install -y pkg-config libasound2-dev
+
+# Fedora
+sudo dnf install -y pkgconf-pkg-config alsa-lib-devel
+
+# Arch
+sudo pacman -S pkgconf alsa-lib
+```
 
 Start the server:
 
@@ -138,6 +151,12 @@ cargo run -p light-discord-client
 6. After registration, use `Login` with display name and password. The server returns a session token; the current client keeps it in memory for `Session` mode after disconnect.
 
 7. To inspect deleted-message audit records, connect as admin and press `Audit` in the admin panel.
+
+Voice device selection:
+
+- The `Voice` section lists `Input` and `Output` devices discovered through `cpal`.
+- Use `Refresh` after plugging in or removing an audio device.
+- `Join` starts the current voice room with the selected device ids. Real capture/playback is still a future backend task, so the current session continues to use UDP heartbeat packets only.
 
 Current limitations:
 

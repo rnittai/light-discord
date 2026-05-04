@@ -1,4 +1,5 @@
 use light_discord_core::VoicePacket;
+use light_discord_platform::AudioDeviceSelection;
 use std::{
     net::UdpSocket,
     sync::mpsc::{self, Sender},
@@ -14,11 +15,19 @@ enum VoiceCommand {
 pub struct VoiceSession {
     stop_tx: Option<Sender<VoiceCommand>>,
     worker: Option<JoinHandle<()>>,
+    selected_devices: AudioDeviceSelection,
 }
 
 impl VoiceSession {
-    pub fn start(&mut self, udp_addr: String, user_id: String, room_id: String) {
+    pub fn start(
+        &mut self,
+        udp_addr: String,
+        user_id: String,
+        room_id: String,
+        selected_devices: AudioDeviceSelection,
+    ) {
         self.stop();
+        self.selected_devices = selected_devices;
 
         let (stop_tx, stop_rx) = mpsc::channel::<VoiceCommand>();
         let worker = thread::spawn(move || {
@@ -57,6 +66,10 @@ impl VoiceSession {
         self.worker = Some(worker);
     }
 
+    pub fn is_running(&self) -> bool {
+        self.stop_tx.is_some()
+    }
+
     pub fn stop(&mut self) {
         if let Some(stop_tx) = self.stop_tx.take() {
             let _ = stop_tx.send(VoiceCommand::Stop);
@@ -64,6 +77,7 @@ impl VoiceSession {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+        self.selected_devices = AudioDeviceSelection::default();
     }
 }
 

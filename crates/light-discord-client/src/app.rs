@@ -3,7 +3,10 @@ use eframe::egui;
 use light_discord_core::{
     AuditLogSummary, ChatMessage, ClientFrame, ServerFrame, UserSummary, VoiceUser,
 };
-use light_discord_platform::{platform_info, PlatformInfo};
+use light_discord_platform::{
+    available_audio_devices, platform_info, AudioDeviceInfo, AudioDeviceList, AudioDeviceSelection,
+    PlatformInfo,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AuthMode {
@@ -34,6 +37,10 @@ pub struct LightDiscordApp {
     audit_entries: Vec<AuditLogSummary>,
     invite_note: String,
     latest_invite_code: String,
+    audio_devices: AudioDeviceList,
+    selected_input_device_id: Option<String>,
+    selected_output_device_id: Option<String>,
+    audio_device_status: String,
     network: Option<NetworkHandle>,
     voice: VoiceSession,
     platform: PlatformInfo,
@@ -45,6 +52,12 @@ impl LightDiscordApp {
             Some(path) => format!("offline / font: {}", path.display()),
             None => "offline / Japanese font not found".to_owned(),
         };
+        let (
+            audio_devices,
+            selected_input_device_id,
+            selected_output_device_id,
+            audio_device_status,
+        ) = load_audio_devices();
 
         Self {
             server_addr: "127.0.0.1:41610".to_owned(),
@@ -67,6 +80,10 @@ impl LightDiscordApp {
             audit_entries: Vec::new(),
             invite_note: String::new(),
             latest_invite_code: String::new(),
+            audio_devices,
+            selected_input_device_id,
+            selected_output_device_id,
+            audio_device_status,
             network: None,
             voice: VoiceSession::default(),
             platform: platform_info(),
@@ -173,8 +190,15 @@ impl LightDiscordApp {
         network.send(ClientFrame::JoinVoice {
             room_id: self.voice_room_id.clone(),
         });
-        self.voice
-            .start(udp_addr, user_id, self.voice_room_id.clone());
+        self.voice.start(
+            udp_addr,
+            user_id,
+            self.voice_room_id.clone(),
+            AudioDeviceSelection {
+                input_device_id: self.selected_input_device_id.clone(),
+                output_device_id: self.selected_output_device_id.clone(),
+            },
+        );
     }
 
     fn leave_voice(&mut self) {
@@ -205,6 +229,31 @@ impl LightDiscordApp {
                     self.status = message;
                 }
                 ClientEvent::Server(frame) => self.apply_server_frame(frame),
+            }
+        }
+    }
+
+    fn refresh_audio_devices(&mut self) {
+        let previous_input = self.selected_input_device_id.clone();
+        let previous_output = self.selected_output_device_id.clone();
+
+        match available_audio_devices() {
+            Ok(devices) => {
+                self.selected_input_device_id =
+                    select_existing_or_first(previous_input, &devices.inputs);
+                self.selected_output_device_id =
+                    select_existing_or_first(previous_output, &devices.outputs);
+                let input_count = devices.inputs.len();
+                let output_count = devices.outputs.len();
+                self.audio_devices = devices;
+                self.audio_device_status =
+                    format!("audio devices: {input_count} input / {output_count} output");
+            }
+            Err(err) => {
+                self.audio_devices = AudioDeviceList::default();
+                self.selected_input_device_id = None;
+                self.selected_output_device_id = None;
+                self.audio_device_status = format!("audio devices unavailable: {err:#}");
             }
         }
     }
@@ -351,14 +400,50 @@ impl eframe::App for LightDiscordApp {
 
                 ui.separator();
                 ui.heading("Voice");
+                let voice_running = self.voice.is_running();
+                ui.add_enabled_ui(!voice_running, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Input");
+                        device_combo(
+                            ui,
+                            "voice_input_device",
+                            &mut self.selected_input_device_id,
+                            &self.audio_devices.inputs,
+                            "No input devices",
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Output");
+                        device_combo(
+                            ui,
+                            "voice_output_device",
+                            &mut self.selected_output_device_id,
+                            &self.audio_devices.outputs,
+                            "No output devices",
+                        );
+                    });
+                });
                 ui.horizontal(|ui| {
-                    if ui.button("Join").clicked() {
+                    if ui
+                        .add_enabled(self.connected && !voice_running, egui::Button::new("Join"))
+                        .clicked()
+                    {
                         self.join_voice();
                     }
-                    if ui.button("Leave").clicked() {
+                    if ui
+                        .add_enabled(voice_running, egui::Button::new("Leave"))
+                        .clicked()
+                    {
                         self.leave_voice();
                     }
+                    if ui
+                        .add_enabled(!voice_running, egui::Button::new("Refresh"))
+                        .clicked()
+                    {
+                        self.refresh_audio_devices();
+                    }
                 });
+                ui.small(&self.audio_device_status);
                 for user in &self.voice_users {
                     ui.label(format!("- {}", user.display_name));
                 }
@@ -466,6 +551,87 @@ impl eframe::App for LightDiscordApp {
         });
 
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+}
+
+fn load_audio_devices() -> (AudioDeviceList, Option<String>, Option<String>, String) {
+    match available_audio_devices() {
+        Ok(devices) => {
+            let selected_input = select_existing_or_first(None, &devices.inputs);
+            let selected_output = select_existing_or_first(None, &devices.outputs);
+            let status = format!(
+                "audio devices: {} input / {} output",
+                devices.inputs.len(),
+                devices.outputs.len()
+            );
+            (devices, selected_input, selected_output, status)
+        }
+        Err(err) => (
+            AudioDeviceList::default(),
+            None,
+            None,
+            format!("audio devices unavailable: {err:#}"),
+        ),
+    }
+}
+
+fn select_existing_or_first(
+    previous: Option<String>,
+    devices: &[AudioDeviceInfo],
+) -> Option<String> {
+    if let Some(previous) = previous {
+        if devices.iter().any(|device| device.id == previous) {
+            return Some(previous);
+        }
+    }
+
+    devices.first().map(|device| device.id.clone())
+}
+
+fn device_combo(
+    ui: &mut egui::Ui,
+    id: &'static str,
+    selected: &mut Option<String>,
+    devices: &[AudioDeviceInfo],
+    empty_label: &'static str,
+) {
+    let selected_text = selected_device_label(selected.as_deref(), devices, empty_label);
+
+    egui::ComboBox::from_id_source(id)
+        .selected_text(selected_text)
+        .width(160.0)
+        .show_ui(ui, |ui| {
+            if devices.is_empty() {
+                ui.label(empty_label);
+                return;
+            }
+
+            for device in devices {
+                ui.selectable_value(
+                    selected,
+                    Some(device.id.clone()),
+                    audio_device_label(device),
+                );
+            }
+        });
+}
+
+fn selected_device_label(
+    selected: Option<&str>,
+    devices: &[AudioDeviceInfo],
+    empty_label: &'static str,
+) -> String {
+    selected
+        .and_then(|id| devices.iter().find(|device| device.id == id))
+        .map(audio_device_label)
+        .unwrap_or_else(|| empty_label.to_owned())
+}
+
+fn audio_device_label(device: &AudioDeviceInfo) -> String {
+    if device.is_default {
+        format!("{} (default)", device.name)
+    } else {
+        device.name.clone()
     }
 }
 

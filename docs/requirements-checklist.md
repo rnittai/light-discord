@@ -6,7 +6,7 @@ Confirm these before turning the scaffold into a production Discord-like app.
 2. Identity: anonymous display names, local accounts, OAuth, SSO, or passkeys.
 3. Server model: one server only, Discord-like guilds, invite links, roles, and permissions.
 4. Persistence: PostgreSQL for real deployments, memory backend only for local development, visible message retention capped at 30 days.
-5. Voice quality: Opus codec target bitrate, mono/stereo, push-to-talk, echo cancellation, noise suppression, input gain, device selection.
+5. Voice quality: Opus codec target bitrate, mono/stereo, push-to-talk, echo cancellation, noise suppression, input gain. Native input/output device selection exists in the MVP client.
 6. Network topology: direct UDP relay, SFU-like relay, NAT traversal, TURN fallback, encryption requirements.
 7. Security: TLS, end-to-end encryption, abuse prevention, rate limits, audit logs.
 8. Moderation: block/report users, mute/deafen/kick/ban, channel permissions.
