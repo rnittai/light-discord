@@ -3,8 +3,8 @@ use light_discord_auth::{
     hash_password, hash_token, new_invite_code, new_session_token, verify_password,
 };
 use light_discord_core::{
-    ChannelId, ChatMessage, ClientFrame, RoomId, ServerFrame, UserId, UserSummary, VoicePacket,
-    VoiceUser,
+    decode_voice_packet_binary, ChannelId, ChatMessage, ClientFrame, RoomId, ServerFrame, UserId,
+    UserSummary, VoiceUser,
 };
 use light_discord_storage::{CreateAccountResult, DeleteMessageResult, Storage};
 use std::{
@@ -762,7 +762,7 @@ async fn run_voice_relay(socket: Arc<UdpSocket>, state: AppState) -> Result<()> 
     let mut buf = vec![0_u8; 64 * 1024];
     loop {
         let (len, from) = socket.recv_from(&mut buf).await?;
-        let packet = match serde_json::from_slice::<VoicePacket>(&buf[..len]) {
+        let packet = match decode_voice_packet_binary(&buf[..len]) {
             Ok(packet) => packet,
             Err(_) => continue,
         };

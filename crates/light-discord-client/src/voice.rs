@@ -1,4 +1,6 @@
-use light_discord_core::{VoicePacket, VOICE_CODEC_OPUS};
+use light_discord_core::{
+    decode_voice_packet_binary, encode_voice_packet_binary, VoicePacket, VOICE_CODEC_OPUS,
+};
 use light_discord_platform::{
     drain_frames, duck_mic_against_remote, frame_rms, resample_linear_mono, AudioBackend,
     AudioDeviceSelection, AudioFrame, CpalAudioBackend, HighPassFilter, JitterBuffer, JitterPop,
@@ -34,7 +36,7 @@ const JITTER_MAX_DEPTH: usize = 20;
 /// FEC. Higher values make Opus reserve more bits for redundancy.
 const OPUS_EXPECTED_PACKET_LOSS_PCT: i32 = 10;
 /// Opus encoder bitrate target (bits/s). 32 kbps is plenty for mono speech and
-/// keeps headroom for the JSON envelope on the existing UDP relay.
+/// keeps headroom for FEC overhead in the binary UDP envelope.
 const OPUS_BITRATE_BPS: i32 = 32_000;
 
 /// Open the noise gate at this RMS amplitude (i16 units, 0..32768).
@@ -318,7 +320,7 @@ fn run_voice_worker(
                 frame_samples: OPUS_FRAME_SAMPLES as u32,
                 payload: out,
             };
-            if let Ok(bytes) = serde_json::to_vec(&packet) {
+            if let Ok(bytes) = encode_voice_packet_binary(&packet) {
                 let _ = socket.send(&bytes);
             }
             sequence = sequence.wrapping_add(1);
@@ -340,7 +342,7 @@ fn run_voice_worker(
                 frame_samples: 0,
                 payload: Vec::new(),
             };
-            if let Ok(bytes) = serde_json::to_vec(&packet) {
+            if let Ok(bytes) = encode_voice_packet_binary(&packet) {
                 let _ = socket.send(&bytes);
             }
             last_heartbeat = Instant::now();
@@ -352,7 +354,7 @@ fn run_voice_worker(
         for _ in 0..16 {
             match socket.recv(&mut recv_buf) {
                 Ok(len) => {
-                    let Ok(packet) = serde_json::from_slice::<VoicePacket>(&recv_buf[..len]) else {
+                    let Ok(packet) = decode_voice_packet_binary(&recv_buf[..len]) else {
                         continue;
                     };
                     if packet.user_id == user_id {
