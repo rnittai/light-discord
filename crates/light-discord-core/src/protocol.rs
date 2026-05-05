@@ -99,6 +99,20 @@ pub enum ClientFrame {
     VoiceHeartbeat {
         room_id: RoomId,
     },
+    StartScreenShare {
+        source_name: String,
+        width: u32,
+        height: u32,
+    },
+    StopScreenShare,
+    ScreenShareFrame {
+        width: u32,
+        height: u32,
+        image_format: String,
+        data_base64: String,
+        sequence: u64,
+        unix_ms: u64,
+    },
     Disconnect,
 }
 
@@ -135,6 +149,26 @@ pub enum ServerFrame {
     VoiceState {
         room_id: RoomId,
         users: Vec<VoiceUser>,
+    },
+    ScreenShareStarted {
+        user_id: UserId,
+        display_name: String,
+        source_name: String,
+        width: u32,
+        height: u32,
+    },
+    ScreenShareStopped {
+        user_id: UserId,
+    },
+    ScreenShareFrame {
+        user_id: UserId,
+        display_name: String,
+        width: u32,
+        height: u32,
+        image_format: String,
+        data_base64: String,
+        sequence: u64,
+        unix_ms: u64,
     },
     Error {
         message: String,
@@ -633,5 +667,99 @@ mod tests {
             decode_voice_packet_binary(&encoded),
             Err(VoicePacketBinaryError::TrailingData)
         );
+    }
+
+    #[test]
+    fn client_frame_start_screen_share_round_trips() {
+        let frame = ClientFrame::StartScreenShare {
+            source_name: "My Display".to_owned(),
+            width: 1920,
+            height: 1080,
+        };
+
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains("\"type\":\"start_screen_share\""));
+
+        let decoded = serde_json::from_str::<ClientFrame>(&json).unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn client_frame_stop_screen_share_round_trips() {
+        let frame = ClientFrame::StopScreenShare;
+
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains("\"type\":\"stop_screen_share\""));
+
+        let decoded = serde_json::from_str::<ClientFrame>(&json).unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn client_frame_screen_share_frame_round_trips() {
+        let frame = ClientFrame::ScreenShareFrame {
+            width: 1920,
+            height: 1080,
+            image_format: "jpeg".to_owned(),
+            data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
+            sequence: 42,
+            unix_ms: 1672531200000,
+        };
+
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains("\"type\":\"screen_share_frame\""));
+
+        let decoded = serde_json::from_str::<ClientFrame>(&json).unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn server_frame_screen_share_started_round_trips() {
+        let frame = ServerFrame::ScreenShareStarted {
+            user_id: "user-1".to_owned(),
+            display_name: "alice".to_owned(),
+            source_name: "My Display".to_owned(),
+            width: 1920,
+            height: 1080,
+        };
+
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains("\"type\":\"screen_share_started\""));
+
+        let decoded = serde_json::from_str::<ServerFrame>(&json).unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn server_frame_screen_share_stopped_round_trips() {
+        let frame = ServerFrame::ScreenShareStopped {
+            user_id: "user-1".to_owned(),
+        };
+
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains("\"type\":\"screen_share_stopped\""));
+
+        let decoded = serde_json::from_str::<ServerFrame>(&json).unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn server_frame_screen_share_frame_round_trips() {
+        let frame = ServerFrame::ScreenShareFrame {
+            user_id: "user-1".to_owned(),
+            display_name: "alice".to_owned(),
+            width: 1920,
+            height: 1080,
+            image_format: "jpeg".to_owned(),
+            data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
+            sequence: 42,
+            unix_ms: 1672531200000,
+        };
+
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains("\"type\":\"screen_share_frame\""));
+
+        let decoded = serde_json::from_str::<ServerFrame>(&json).unwrap();
+        assert_eq!(decoded, frame);
     }
 }

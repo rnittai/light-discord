@@ -11,8 +11,10 @@ anyhow.workspace = true
 # which causes libopus to be built and linked statically for self-contained
 # Windows/Linux binaries.
 audiopus_sys.workspace = true
+base64.workspace = true
 eframe.workspace = true
 egui.workspace = true
+image.workspace = true
 light-discord-core = { path = "../light-discord-core" }
 light-discord-platform = { path = "../light-discord-platform" }
 opus.workspace = true

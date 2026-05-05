@@ -18,9 +18,11 @@ rust-version = "1.95"
 anyhow = "1"
 argon2 = "0.5"
 audiopus_sys = { version = "0.2", features = ["static"] }
+base64 = "0.22"
 cpal = "0.17"
 eframe = "0.27"
 egui = "0.27"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 opus = "0.3"
 password-hash = { version = "0.5", features = ["rand_core"] }
 rand_core = { version = "0.6", features = ["getrandom"] }

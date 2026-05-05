@@ -12,11 +12,13 @@ Light Discord is split into four Rust crates so Windows and Linux support can sh
 
 ## Platform-Specific Boundary
 
-- `light-discord-platform`: OS capability boundary for audio, notifications, packaging hints, and future native integrations.
-- `src/os/linux.rs`: Linux-specific integration notes for PipeWire/PulseAudio/ALSA, freedesktop notifications, and packaging.
-- `src/os/windows.rs`: Windows-specific integration notes for WASAPI, toast notifications, and MSI/portable packaging.
+- `light-discord-platform`: OS capability boundary for audio, screen capture, notifications, packaging hints, and future native integrations.
+- `src/os/linux.rs`: Linux-specific integration notes for PipeWire/PulseAudio/ALSA, xcap screen capture, freedesktop notifications, and packaging.
+- `src/os/windows.rs`: Windows-specific integration notes for WASAPI, xcap screen capture, toast notifications, and MSI/portable packaging.
 
 The current voice path implements room membership, binary-framed UDP packet relay, and `cpal` device enumeration for native input/output selection. UDP voice payloads are encoded and decoded with `encode_voice_packet_binary`/`decode_voice_packet_binary` (magic/version header, length-prefixed `user_id`/`room_id`, sequence/sample_rate/channels/codec/frame_samples fields, and raw payload bytes). TCP chat/control remains newline-delimited JSON. The audio backend trait is present; `CpalAudioBackend` in `light-discord-platform` provides the full Opus 48 kHz capture/playback pipeline with jitter buffering.
+
+Screen sharing is implemented as an MVP transport over the existing TCP JSON control connection. Platform capture uses `xcap` on Linux/Windows to enumerate displays and non-minimized windows. The client sends downscaled JPEG frames as base64-encoded strings within `ScreenShareFrame` messages. The server broadcasts authenticated `ScreenShareStarted`, `ScreenShareStopped`, and `ScreenShareFrame` messages to all clients in the room without decoding the frame data. This MVP is suitable for friend/self-hosted validation but not production use; future work should move to a dedicated binary/video transport with proper codec, rate control, and encryption support.
 
 ## Persistence and Audit Boundary
 
@@ -41,6 +43,12 @@ Admin-only protocol:
 
 - `AdminCreateInvite`: creates a one-time invite code.
 - `AdminListAuditLog`: returns recent audit events.
+
+Screen sharing protocol:
+
+- `ScreenShareStarted`: sent by server when a client starts broadcasting; includes the broadcasting user's ID.
+- `ScreenShareStopped`: sent by server when a client stops broadcasting.
+- `ScreenShareFrame`: contains a base64-encoded JPEG frame; sent by client and relayed by server to all room members. Server does not validate frame format or contents.
 
 ## Runtime Ports
 

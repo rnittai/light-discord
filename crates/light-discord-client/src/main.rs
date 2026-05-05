@@ -1,6 +1,7 @@
 mod app;
 mod fonts;
 mod net;
+mod screen_share;
 mod voice;
 
 fn main() -> eframe::Result<()> {

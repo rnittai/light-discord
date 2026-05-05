@@ -30,10 +30,26 @@ struct AppState {
     storage: Storage,
 }
 
+struct ScreenShareInfo {
+    source_name: String,
+    width: u32,
+    height: u32,
+}
+
+struct ScreenShareFramePayload {
+    width: u32,
+    height: u32,
+    image_format: String,
+    data_base64: String,
+    sequence: u64,
+    unix_ms: u64,
+}
+
 struct InnerState {
     users: HashMap<UserId, UserConnection>,
     voice_rooms: HashMap<RoomId, HashSet<UserId>>,
     voice_addrs: HashMap<UserId, SocketAddr>,
+    screen_shares: HashMap<UserId, ScreenShareInfo>,
 }
 
 struct UserConnection {
@@ -60,6 +76,7 @@ impl AppState {
                 users: HashMap::new(),
                 voice_rooms: HashMap::new(),
                 voice_addrs: HashMap::new(),
+                screen_shares: HashMap::new(),
             })),
             storage,
         }
@@ -84,10 +101,12 @@ impl AppState {
     }
 
     async fn disconnect_user(&self, user_id: &str) {
-        let changed_rooms = {
+        let (changed_rooms, had_screen_share) = {
             let mut inner = self.inner.write().await;
             inner.users.remove(user_id);
             inner.voice_addrs.remove(user_id);
+
+            let had_screen_share = inner.screen_shares.remove(user_id).is_some();
 
             let mut changed_rooms = Vec::new();
             for (room_id, members) in &mut inner.voice_rooms {
@@ -95,8 +114,15 @@ impl AppState {
                     changed_rooms.push(room_id.clone());
                 }
             }
-            changed_rooms
+            (changed_rooms, had_screen_share)
         };
+
+        if had_screen_share {
+            self.broadcast(ServerFrame::ScreenShareStopped {
+                user_id: user_id.to_owned(),
+            })
+            .await;
+        }
 
         self.broadcast_user_list().await;
         for room_id in changed_rooms {
@@ -405,6 +431,162 @@ impl AppState {
             .filter_map(|user_id| inner.voice_addrs.get(user_id).copied())
             .collect()
     }
+
+    async fn start_screen_share(
+        &self,
+        user_id: &str,
+        source_name: String,
+        width: u32,
+        height: u32,
+    ) {
+        let trimmed_source = source_name.trim();
+        if trimmed_source.is_empty() {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: "source_name cannot be empty".to_owned(),
+                },
+            )
+            .await;
+            return;
+        }
+
+        if width == 0 || height == 0 {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: "width and height must be non-zero".to_owned(),
+                },
+            )
+            .await;
+            return;
+        }
+
+        let display_name = {
+            let inner = self.inner.read().await;
+            inner.users.get(user_id).map(|u| u.display_name.clone())
+        };
+
+        let Some(display_name) = display_name else {
+            return;
+        };
+
+        {
+            let mut inner = self.inner.write().await;
+            inner.screen_shares.insert(
+                user_id.to_owned(),
+                ScreenShareInfo {
+                    source_name: trimmed_source.to_owned(),
+                    width,
+                    height,
+                },
+            );
+        }
+
+        self.broadcast(ServerFrame::ScreenShareStarted {
+            user_id: user_id.to_owned(),
+            display_name,
+            source_name: trimmed_source.to_owned(),
+            width,
+            height,
+        })
+        .await;
+    }
+
+    async fn stop_screen_share(&self, user_id: &str) {
+        let had_share = {
+            let mut inner = self.inner.write().await;
+            inner.screen_shares.remove(user_id).is_some()
+        };
+
+        if had_share {
+            self.broadcast(ServerFrame::ScreenShareStopped {
+                user_id: user_id.to_owned(),
+            })
+            .await;
+        }
+    }
+
+    async fn broadcast_screen_share_frame(&self, user_id: &str, frame: ScreenShareFramePayload) {
+        if frame.width == 0 || frame.height == 0 {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: "width and height must be non-zero".to_owned(),
+                },
+            )
+            .await;
+            return;
+        }
+
+        if frame.image_format.trim().is_empty() {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: "image_format cannot be empty".to_owned(),
+                },
+            )
+            .await;
+            return;
+        }
+
+        if frame.data_base64.trim().is_empty() {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: "data_base64 cannot be empty".to_owned(),
+                },
+            )
+            .await;
+            return;
+        }
+
+        let (display_name, active_share) = {
+            let inner = self.inner.read().await;
+            let active_share = inner
+                .screen_shares
+                .get(user_id)
+                .map(|info| (info.source_name.clone(), info.width, info.height));
+            let display_name = inner.users.get(user_id).map(|u| u.display_name.clone());
+            (display_name, active_share)
+        };
+
+        let Some((source_name, declared_width, declared_height)) = active_share else {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: "no active screen share".to_owned(),
+                },
+            )
+            .await;
+            return;
+        };
+
+        if frame.width > declared_width || frame.height > declared_height {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: format!("frame exceeds declared screen share size for {source_name}"),
+                },
+            )
+            .await;
+            return;
+        }
+
+        if let Some(display_name) = display_name {
+            self.broadcast(ServerFrame::ScreenShareFrame {
+                user_id: user_id.to_owned(),
+                display_name,
+                width: frame.width,
+                height: frame.height,
+                image_format: frame.image_format,
+                data_base64: frame.data_base64,
+                sequence: frame.sequence,
+                unix_ms: frame.unix_ms,
+            })
+            .await;
+        }
+    }
 }
 
 #[tokio::main]
@@ -564,6 +746,40 @@ async fn handle_client(
             }
             Ok(ClientFrame::VoiceHeartbeat { room_id }) => {
                 state.join_voice(&authenticated.user_id, room_id).await;
+            }
+            Ok(ClientFrame::StartScreenShare {
+                source_name,
+                width,
+                height,
+            }) => {
+                state
+                    .start_screen_share(&authenticated.user_id, source_name, width, height)
+                    .await;
+            }
+            Ok(ClientFrame::StopScreenShare) => {
+                state.stop_screen_share(&authenticated.user_id).await;
+            }
+            Ok(ClientFrame::ScreenShareFrame {
+                width,
+                height,
+                image_format,
+                data_base64,
+                sequence,
+                unix_ms,
+            }) => {
+                state
+                    .broadcast_screen_share_frame(
+                        &authenticated.user_id,
+                        ScreenShareFramePayload {
+                            width,
+                            height,
+                            image_format,
+                            data_base64,
+                            sequence,
+                            unix_ms,
+                        },
+                    )
+                    .await;
             }
             Ok(ClientFrame::Disconnect) => break,
             Err(err) => {

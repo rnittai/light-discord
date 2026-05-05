@@ -107,6 +107,14 @@ Voice:
 - The egui client now exposes `Mute mic` and `Deafen` toggles in the Voice panel and highlights the active speaker(s) in the voice user list — including the local user.
 - Limitations: simple mic-ducking is *not* AEC. There is no SRTP, no DTX, no adaptive bitrate. The server reads the binary header for routing and relays the datagram unchanged; it does not decode Opus payloads.
 
+Screen Sharing:
+
+- MVP implementation sends downscaled JPEG frames over the existing TCP JSON control connection using base64 encoding.
+- Platform capture uses `xcap` on Linux/Windows to enumerate displays and non-minimized windows. The client provides a list of available capture sources and allows the user to select one before starting the broadcast.
+- The server broadcasts authenticated `ScreenShareStarted`, `ScreenShareStopped`, and `ScreenShareFrame` messages to all clients in the room. The server does not trust client-provided user IDs and validates them from the connection state.
+- Remote screen shares are displayed in the central panel above chat messages.
+- Limitations: MVP transport is over TCP with base64 encoding, not suitable for production use. Future work should move to a dedicated binary/video transport with proper codec, rate control, and encryption. Docker containers without graphical session (X11/Wayland forwarding) can compile and run unit tests normally but cannot actually capture or display screens.
+
 ## Current How To Use
 
 Development mode without PostgreSQL:
@@ -229,6 +237,8 @@ At the time of this handoff, `main` was pushed to `origin/main`.
 - No roles/permissions UI beyond basic admin flag.
 - No TLS/reverse proxy automation yet.
 - Voice runs Opus 48 kHz mono 20 ms with PLC/FEC and a jitter buffer; mute/deafen toggles and active-speaker highlighting are wired up. Closed-gate frames are suppressed at the source (Opus DTX is not used). Echo handling is a simple ducking heuristic, not full AEC. UDP datagrams use the binary codec (`encode_voice_packet_binary`/`decode_voice_packet_binary`). No SRTP/encryption, no adaptive bitrate.
+- Screen sharing MVP uses TCP JSON with base64-encoded JPEG frames; not production-grade. Future work should move to a dedicated binary/video transport with better codec, rate control, and encryption.
+- Screen capture and display require a graphical session (X11/Wayland on Linux, native on Windows). Docker containers without graphical forwarding can compile and pass unit tests normally but cannot capture or display screens.
 - Native packaging for Windows/Linux has not been implemented.
 - Docker CLI is not installed in the current container, though Docker Compose files exist for host-side use.
 
@@ -306,7 +316,7 @@ The client now persists session tokens through `light-discord-platform`:
 Suggested next development steps:
 
 1. Add a small admin/account management UI.
-2. Screen sharing with full-screen and window capture selection.
+2. Upgrade screen sharing transport to a dedicated binary/video codec with rate control.
 3. Add role/channel permission model.
 4. Add TLS/reverse-proxy deployment guide for self-hosting.
 5. Real AEC (with playback reference signal), DTX, and adaptive bitrate.

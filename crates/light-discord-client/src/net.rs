@@ -37,6 +37,10 @@ impl NetworkHandle {
         let _ = self.command_tx.send(frame);
     }
 
+    pub fn command_sender(&self) -> Sender<ClientFrame> {
+        self.command_tx.clone()
+    }
+
     pub fn poll(&self) -> Vec<ClientEvent> {
         let mut events = Vec::new();
         while let Ok(event) = self.event_rx.try_recv() {

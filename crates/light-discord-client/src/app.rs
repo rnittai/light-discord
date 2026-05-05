@@ -2,16 +2,20 @@ use crate::{
     fonts,
     net::ClientEvent,
     net::NetworkHandle,
+    screen_share::{start_screen_share, ScreenShareEvent, ScreenShareSession},
     voice::{VoiceSession, VoiceShared},
 };
+use base64::Engine;
 use eframe::egui;
 use light_discord_core::{
-    AuditLogSummary, ChatMessage, ClientFrame, ServerFrame, UserSummary, VoiceUser,
+    AuditLogSummary, ChatMessage, ClientFrame, ServerFrame, UserId, UserSummary, VoiceUser,
 };
 use light_discord_platform::{
-    available_audio_devices, delete_session_token, load_session_token, platform_info,
-    save_session_token, AudioDeviceInfo, AudioDeviceList, AudioDeviceSelection, PlatformInfo,
+    available_audio_devices, available_screen_sources, delete_session_token, load_session_token,
+    platform_info, save_session_token, AudioDeviceInfo, AudioDeviceList, AudioDeviceSelection,
+    PlatformInfo, ScreenShareSource,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +24,17 @@ enum AuthMode {
     Register,
     Session,
     Dev,
+}
+
+struct RemoteScreenShare {
+    display_name: String,
+    source_name: String,
+    width: u32,
+    height: u32,
+    latest_frame: Option<egui::ColorImage>,
+    latest_sequence: Option<u64>,
+    texture: Option<egui::TextureHandle>,
+    status: String,
 }
 
 pub struct LightDiscordApp {
@@ -54,6 +69,11 @@ pub struct LightDiscordApp {
     voice_muted: bool,
     voice_deafened: bool,
     platform: PlatformInfo,
+    screen_sources: Vec<ScreenShareSource>,
+    selected_source_id: Option<String>,
+    screen_share_status: String,
+    local_screen_share: Option<ScreenShareSession>,
+    remote_screen_shares: HashMap<UserId, RemoteScreenShare>,
 }
 
 impl LightDiscordApp {
@@ -68,6 +88,8 @@ impl LightDiscordApp {
             selected_output_device_id,
             audio_device_status,
         ) = load_audio_devices();
+
+        let (screen_sources, screen_share_status) = load_screen_sources();
 
         let default_server = "127.0.0.1:41610";
         let (auth_mode, session_token, session_token_status) =
@@ -105,6 +127,11 @@ impl LightDiscordApp {
             voice_muted: false,
             voice_deafened: false,
             platform: platform_info(),
+            screen_sources,
+            selected_source_id: None,
+            screen_share_status,
+            local_screen_share: None,
+            remote_screen_shares: HashMap::new(),
         }
     }
 
@@ -142,6 +169,11 @@ impl LightDiscordApp {
         self.users.clear();
         self.voice_users.clear();
         self.voice.stop();
+        if let Some(session) = &self.local_screen_share {
+            session.stop();
+        }
+        self.local_screen_share = None;
+        self.remote_screen_shares.clear();
         self.status = "offline".to_owned();
     }
 
@@ -253,6 +285,11 @@ impl LightDiscordApp {
                     self.status = reason;
                     self.connected = false;
                     self.voice.stop();
+                    if let Some(session) = &self.local_screen_share {
+                        session.stop();
+                    }
+                    self.local_screen_share = None;
+                    self.remote_screen_shares.clear();
                 }
                 ClientEvent::Error(message) => {
                     self.status = message;
@@ -260,6 +297,8 @@ impl LightDiscordApp {
                 ClientEvent::Server(frame) => self.apply_server_frame(frame),
             }
         }
+
+        self.poll_screen_share_events();
     }
 
     fn refresh_audio_devices(&mut self) {
@@ -283,6 +322,63 @@ impl LightDiscordApp {
                 self.selected_input_device_id = None;
                 self.selected_output_device_id = None;
                 self.audio_device_status = format!("audio devices unavailable: {err:#}");
+            }
+        }
+    }
+
+    fn refresh_screen_sources(&mut self) {
+        let (screen_sources, screen_share_status) = load_screen_sources();
+        self.screen_sources = screen_sources;
+        self.screen_share_status = screen_share_status;
+        self.selected_source_id = None;
+    }
+
+    fn start_screen_share(&mut self) {
+        let source = match self.selected_source_id.as_ref() {
+            Some(source_id) => self
+                .screen_sources
+                .iter()
+                .find(|s| &s.id == source_id)
+                .cloned(),
+            None => None,
+        };
+
+        let Some(source) = source else {
+            self.screen_share_status = "no source selected".to_owned();
+            return;
+        };
+
+        let Some(network) = &self.network else {
+            self.screen_share_status = "not connected".to_owned();
+            return;
+        };
+
+        let session = start_screen_share(source, network.command_sender());
+        self.local_screen_share = Some(session);
+        self.screen_share_status = "sharing started".to_owned();
+    }
+
+    fn stop_screen_share(&mut self) {
+        if let Some(session) = &self.local_screen_share {
+            session.stop();
+        }
+        self.local_screen_share = None;
+        self.screen_share_status = "sharing stopped".to_owned();
+    }
+
+    fn poll_screen_share_events(&mut self) {
+        if let Some(session) = &self.local_screen_share {
+            for event in session.poll() {
+                match event {
+                    ScreenShareEvent::Error(err) => {
+                        self.screen_share_status = format!("error: {err}");
+                        self.local_screen_share = None;
+                    }
+                    ScreenShareEvent::Stopped => {
+                        self.screen_share_status = "sharing stopped".to_owned();
+                        self.local_screen_share = None;
+                    }
+                }
             }
         }
     }
@@ -340,6 +436,81 @@ impl LightDiscordApp {
             ServerFrame::VoiceState { room_id, users } => {
                 if room_id == self.voice_room_id {
                     self.voice_users = users;
+                }
+            }
+            ServerFrame::ScreenShareStarted {
+                user_id,
+                display_name,
+                source_name,
+                width,
+                height,
+            } => {
+                self.remote_screen_shares.insert(
+                    user_id,
+                    RemoteScreenShare {
+                        display_name,
+                        source_name,
+                        width,
+                        height,
+                        latest_frame: None,
+                        latest_sequence: None,
+                        texture: None,
+                        status: "waiting for frame".to_owned(),
+                    },
+                );
+            }
+            ServerFrame::ScreenShareStopped { user_id } => {
+                self.remote_screen_shares.remove(&user_id);
+            }
+            ServerFrame::ScreenShareFrame {
+                user_id,
+                display_name,
+                width,
+                height,
+                sequence,
+                data_base64,
+                ..
+            } => {
+                let remote_share =
+                    self.remote_screen_shares
+                        .entry(user_id)
+                        .or_insert_with(|| RemoteScreenShare {
+                            display_name: display_name.clone(),
+                            source_name: "Screen share".to_owned(),
+                            width,
+                            height,
+                            latest_frame: None,
+                            latest_sequence: None,
+                            texture: None,
+                            status: "waiting for frame".to_owned(),
+                        });
+
+                if remote_share
+                    .latest_sequence
+                    .is_some_and(|latest| sequence <= latest)
+                {
+                    return;
+                }
+
+                remote_share.display_name = display_name;
+                remote_share.width = width;
+                remote_share.height = height;
+                remote_share.latest_sequence = Some(sequence);
+                match base64::engine::general_purpose::STANDARD.decode(&data_base64) {
+                    Ok(decoded) => match decode_remote_screen_frame(&decoded) {
+                        Ok(frame) => {
+                            remote_share.latest_frame = Some(frame);
+                            remote_share.status = format!("frame {sequence}");
+                        }
+                        Err(err) => {
+                            remote_share.latest_frame = None;
+                            remote_share.status = format!("decode failed: {err}");
+                        }
+                    },
+                    Err(err) => {
+                        remote_share.latest_frame = None;
+                        remote_share.status = format!("base64 failed: {err}");
+                    }
                 }
             }
             ServerFrame::Error { message } => {
@@ -560,6 +731,58 @@ impl eframe::App for LightDiscordApp {
                 }
 
                 ui.separator();
+                ui.heading("Screen");
+                let sharing = self
+                    .local_screen_share
+                    .as_ref()
+                    .is_some_and(|s| s.is_running());
+                let source_options: Vec<_> = self
+                    .screen_sources
+                    .iter()
+                    .map(|s| (s.id.clone(), s.title.clone()))
+                    .collect();
+                if !source_options.is_empty() {
+                    egui::ComboBox::from_id_source("screen_source")
+                        .selected_text(
+                            self.selected_source_id
+                                .as_ref()
+                                .and_then(|id| {
+                                    source_options
+                                        .iter()
+                                        .find(|(s_id, _)| s_id == id)
+                                        .map(|(_, title)| title.as_str())
+                                })
+                                .unwrap_or("Select source"),
+                        )
+                        .width(180.0)
+                        .show_ui(ui, |ui| {
+                            for (id, title) in source_options {
+                                ui.selectable_value(&mut self.selected_source_id, Some(id), title);
+                            }
+                        });
+                } else {
+                    ui.label("No sources");
+                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.connected && self.selected_source_id.is_some() && !sharing,
+                            egui::Button::new("Share"),
+                        )
+                        .clicked()
+                    {
+                        self.start_screen_share();
+                    }
+                    if ui.add_enabled(sharing, egui::Button::new("Stop")).clicked() {
+                        self.stop_screen_share();
+                    }
+                    if ui.button("Refresh").clicked() {
+                        self.refresh_screen_sources();
+                    }
+                });
+                ui.small(&self.screen_share_status);
+
+                ui.separator();
                 ui.heading("Online");
                 for user in &self.users {
                     ui.label(&user.display_name);
@@ -611,6 +834,43 @@ impl eframe::App for LightDiscordApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading(format!("# {}", self.channel_id));
             ui.separator();
+
+            if !self.remote_screen_shares.is_empty() {
+                ui.heading("Screen Shares");
+                for (user_id, remote_share) in &mut self.remote_screen_shares {
+                    ui.label(format!(
+                        "{} - {}",
+                        remote_share.display_name, remote_share.source_name
+                    ));
+
+                    if let Some(frame) = remote_share.latest_frame.take() {
+                        if let Some(texture) = &mut remote_share.texture {
+                            texture.set(frame, egui::TextureOptions::LINEAR);
+                        } else {
+                            remote_share.texture = Some(ctx.load_texture(
+                                format!("screen_{user_id}"),
+                                frame,
+                                egui::TextureOptions::LINEAR,
+                            ));
+                        }
+                    }
+
+                    if let Some(texture) = &remote_share.texture {
+                        let texture_size = texture.size_vec2();
+                        let max_width = ui.available_width().max(1.0);
+                        let scale = (max_width / texture_size.x).min(1.0);
+                        let display_size = texture_size * scale;
+                        ui.image((texture.id(), display_size));
+                    } else {
+                        ui.label(&remote_share.status);
+                    }
+                    ui.small(format!(
+                        "{}x{} / {}",
+                        remote_share.width, remote_share.height, remote_share.status
+                    ));
+                    ui.separator();
+                }
+            }
 
             egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
@@ -772,4 +1032,29 @@ fn whoami_fallback() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "guest".to_owned())
+}
+
+fn load_screen_sources() -> (Vec<ScreenShareSource>, String) {
+    match available_screen_sources() {
+        Ok(sources) => {
+            let count = sources.len();
+            let status = if count > 0 {
+                format!("sources: {}", count)
+            } else {
+                "no sources available".to_owned()
+            };
+            (sources, status)
+        }
+        Err(err) => (Vec::new(), format!("sources unavailable: {err:#}")),
+    }
+}
+
+fn decode_remote_screen_frame(frame_data: &[u8]) -> Result<egui::ColorImage, image::ImageError> {
+    let img = image::load_from_memory(frame_data)?;
+    let rgba_img = img.to_rgba8();
+    let (width, height) = rgba_img.dimensions();
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        [width as usize, height as usize],
+        rgba_img.as_raw(),
+    ))
 }

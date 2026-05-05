@@ -4,12 +4,12 @@ A lightweight Discord-like Rust application scaffold for Windows and Linux. It u
 
 ## What Exists
 
-- `light-discord-core`: shared protocol types for chat, presence, and voice packets.
+- `light-discord-core`: shared protocol types for chat, presence, voice packets, and screen sharing.
 - `light-discord-auth`: password hashing, invite code, and session token primitives.
 - `light-discord-storage`: PostgreSQL persistence and development memory storage.
 - `light-discord-server`: TCP chat/control server and UDP voice packet relay.
-- `light-discord-client`: native desktop client with connection, channel chat, online users, and voice room join/leave.
-- `light-discord-platform`: Windows/Linux-specific boundary for audio, notification, and packaging work.
+- `light-discord-client`: native desktop client with connection, channel chat, online users, voice room join/leave, and screen sharing.
+- `light-discord-platform`: Windows/Linux-specific boundary for audio, screen capture, notifications, and packaging work.
 
 The current voice implementation has room state, UDP relay plumbing, native input/output device selection, and a production-style voice path: captured microphone audio is resampled to 48 kHz mono, run through a high-pass + RMS noise gate + cheap mic-ducking DSP path. Frames where the noise gate is closed are not transmitted (suppressed at the source). Open-gate frames are encoded as 20 ms Opus frames (with in-band FEC enabled) and sent through the UDP relay as `VoicePacket`s with `codec="opus"`. On the receiving side a per-remote jitter buffer uses Opus PLC and FEC to mask packet loss. Mute and deafen toggles in the client gate the microphone and remote playback respectively, while still keeping the voice-room heartbeat alive so the UDP relay continues to learn the client's address. The voice-user list highlights the active speaker(s) — including the local user — only for actually transmitted/audible frames.
 
@@ -23,8 +23,9 @@ Authentication is enforced when PostgreSQL is configured. The server supports in
 
 Install Rust stable. This workspace was verified with Rust 1.95.0.
 
-Linux builds need ALSA development headers (for `cpal`) and CMake plus a C
-toolchain (for the bundled libopus that `audiopus_sys` builds statically).
+Linux builds need ALSA development headers (for `cpal`), xcap screen capture
+dependencies (for display/window enumeration), and CMake plus a C toolchain (for
+the bundled libopus that `audiopus_sys` builds statically).
 Run the setup script to install them automatically:
 
 ```bash
@@ -36,10 +37,10 @@ If you prefer to install manually, the packages are:
 
 | Distro | Command |
 |--------|---------|
-| Debian / Ubuntu | `sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev cmake build-essential` |
-| Fedora / RHEL / CentOS / Rocky / Alma | `sudo dnf install -y pkgconf-pkg-config alsa-lib-devel cmake gcc gcc-c++ make` |
-| Arch / Manjaro | `sudo pacman -Sy --needed --noconfirm pkgconf alsa-lib cmake base-devel` |
-| openSUSE / SLES | `sudo zypper --non-interactive install pkgconf-pkg-config alsa-devel cmake gcc gcc-c++ make` |
+| Debian / Ubuntu | `sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev cmake build-essential libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev` |
+| Fedora / RHEL / CentOS / Rocky / Alma | `sudo dnf install -y pkgconf-pkg-config alsa-lib-devel cmake gcc gcc-c++ make clang-devel libxcb-devel libXrandr-devel dbus-devel pipewire-devel wayland-devel mesa-libEGL-devel mesa-libgbm-devel libxkbcommon-devel` |
+| Arch / Manjaro | `sudo pacman -Sy --needed --noconfirm pkgconf alsa-lib cmake base-devel clang libxcb libxrandr dbus pipewire wayland mesa libxkbcommon` |
+| openSUSE / SLES | `sudo zypper --non-interactive install pkgconf-pkg-config alsa-devel cmake gcc gcc-c++ make clang-devel libxcb-devel libXrandr-devel dbus-1-devel pipewire-devel wayland-devel Mesa-libEGL-devel Mesa-libgbm-devel libxkbcommon-devel` |
 
 Windows builds need only the standard MSVC or GNU toolchain that the Rust
 installer sets up; CMake comes bundled with most Visual Studio installs and
@@ -171,6 +172,15 @@ Voice device selection and controls:
 - `Mute mic` stops outgoing audio while keeping the voice-room heartbeat. `Deafen` stops remote playback (and implicitly mutes the mic).
 - The voice user list shows a green `*` marker and name for users currently emitting audible audio, including yourself.
 
+Screen sharing:
+
+- The `Screen` section lists available displays and non-minimized windows.
+- Use `Refresh` to update the list when displays or windows change.
+- Select a display or window, press `Share` to start broadcasting your screen.
+- Remote screen shares appear in the central panel above chat.
+- Press `Stop` to end the broadcast.
+- MVP transport sends downscaled JPEG frames over the existing TCP JSON control connection using base64 encoding. This is for friend/self-hosted validation, not production video. Future production work should move to a dedicated binary/video transport with better codec, rate control, and encryption.
+
 Session token storage:
 
 - The client saves session tokens after successful Login or Register when the server returns one.
@@ -184,7 +194,9 @@ Current limitations:
 
 - Account management, password reset, role management, TLS setup are still future work.
 - There is no SRTP/encryption, no Opus DTX (closed-gate frames are suppressed by the RMS noise gate at the source, not by the codec), no adaptive bitrate, and no real acoustic echo cancellation — only a simple mic-ducking heuristic that attenuates the microphone when remote playback is loud. The voice path is fine for friend-group calls but is not Discord-grade.
+- Screen sharing over TCP using base64-encoded JPEG is MVP-only for friend/self-hosted validation; production use requires a dedicated binary/video transport.
 - The client UI is intentionally minimal and aimed at validating the backend flow first.
+- Screen capture and display require a graphical session; Docker containers without X11/Wayland forwarding cannot capture or display screens, though compilation and unit tests work normally.
 
 Japanese text rendering:
 
