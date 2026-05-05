@@ -176,10 +176,12 @@ Screen sharing:
 
 - The `Screen` section lists available displays and non-minimized windows.
 - Use `Refresh` to update the list when displays or windows change.
+- Choose `Text` mode for readable low-FPS sharing, or `Game` mode for 30 FPS / 60 FPS sharing.
+- Choose `1080p` or `720p` as the capture resolution cap.
 - Select a display or window, press `Share` to start broadcasting your screen.
 - Remote screen shares appear in the central panel above chat.
 - Press `Stop` to end the broadcast.
-- MVP transport sends downscaled JPEG frames over the existing TCP JSON control connection using base64 encoding. This is for friend/self-hosted validation, not production video. Future production work should move to a dedicated binary/video transport with better codec, rate control, and encryption.
+- Screen sharing uses an SFU-style server relay over the existing TCP JSON control connection: the sender uploads one frame stream to the server, and the server forwards frames to other connected clients without echoing them back to the sender. The client advertises AV1/VP9/JPEG codec preference metadata, but the current native encoder path only produces JPEG frames, so the server negotiates JPEG as the active fallback. This is for friend/self-hosted validation, not production video. Future production work should move to a dedicated binary/video transport with real AV1/VP9 encoding, rate control, and encryption.
 
 Session token storage:
 
@@ -194,7 +196,7 @@ Current limitations:
 
 - Account management, password reset, role management, TLS setup are still future work.
 - There is no SRTP/encryption, no Opus DTX (closed-gate frames are suppressed by the RMS noise gate at the source, not by the codec), no adaptive bitrate, and no real acoustic echo cancellation — only a simple mic-ducking heuristic that attenuates the microphone when remote playback is loud. The voice path is fine for friend-group calls but is not Discord-grade.
-- Screen sharing over TCP using base64-encoded JPEG is MVP-only for friend/self-hosted validation; production use requires a dedicated binary/video transport.
+- Screen sharing over TCP using base64-encoded JPEG is MVP-only for friend/self-hosted validation; production use requires a dedicated binary/video transport and real AV1/VP9 encoder support.
 - The client UI is intentionally minimal and aimed at validating the backend flow first.
 - Screen capture and display require a graphical session; Docker containers without X11/Wayland forwarding cannot capture or display screens, though compilation and unit tests work normally.
 

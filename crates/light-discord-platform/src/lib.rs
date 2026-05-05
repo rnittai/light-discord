@@ -11,8 +11,8 @@ pub use audio::{
 };
 pub use os::{platform_info, PlatformInfo};
 pub use screen::{
-    available_screen_sources, capture_screen_source_jpeg, ScreenCaptureFrame, ScreenShareSource,
-    ScreenShareSourceKind,
+    available_screen_sources, capture_screen_source_jpeg, fit_screen_share_dimensions,
+    ScreenCaptureFrame, ScreenShareSource, ScreenShareSourceKind,
 };
 pub use session_token::{
     delete_session_token, load_session_token, save_session_token, SessionTokenStore,

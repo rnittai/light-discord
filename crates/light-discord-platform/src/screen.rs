@@ -54,15 +54,31 @@ fn clamp_jpeg_quality(quality: u8) -> u8 {
     quality.clamp(1, 100)
 }
 
-fn scaled_dimensions(width: u32, height: u32, max_width: u32) -> (u32, u32) {
-    if width == 0 || height == 0 || max_width == 0 || width <= max_width {
+pub fn fit_screen_share_dimensions(
+    width: u32,
+    height: u32,
+    max_width: u32,
+    max_height: u32,
+) -> (u32, u32) {
+    if width == 0 || height == 0 || max_width == 0 || max_height == 0 {
         return (width, height);
     }
 
-    let scaled_height = ((height as u64 * max_width as u64) / width as u64)
+    if width <= max_width && height <= max_height {
+        return (width, height);
+    }
+
+    let width_limited_height = ((height as u64 * max_width as u64) / width as u64)
         .max(1)
         .min(u32::MAX as u64) as u32;
-    (max_width, scaled_height)
+    if width_limited_height <= max_height {
+        return (max_width, width_limited_height);
+    }
+
+    let height_limited_width = ((width as u64 * max_height as u64) / height as u64)
+        .max(1)
+        .min(u32::MAX as u64) as u32;
+    (height_limited_width, max_height)
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -138,6 +154,7 @@ pub fn available_screen_sources() -> Result<Vec<ScreenShareSource>> {
 pub fn capture_screen_source_jpeg(
     source_id: &str,
     max_width: u32,
+    max_height: u32,
     quality: u8,
 ) -> Result<ScreenCaptureFrame> {
     let (kind, native_id) = parse_source_id(source_id)?;
@@ -153,6 +170,7 @@ pub fn capture_screen_source_jpeg(
                     .capture_image()
                     .context("failed to capture display")?,
                 max_width,
+                max_height,
                 quality,
             )
         }
@@ -168,6 +186,7 @@ pub fn capture_screen_source_jpeg(
             encode_jpeg_frame(
                 window.capture_image().context("failed to capture window")?,
                 max_width,
+                max_height,
                 quality,
             )
         }
@@ -178,6 +197,7 @@ pub fn capture_screen_source_jpeg(
 pub fn capture_screen_source_jpeg(
     _source_id: &str,
     _max_width: u32,
+    _max_height: u32,
     _quality: u8,
 ) -> Result<ScreenCaptureFrame> {
     Err(anyhow!("screen capture is not supported on this platform"))
@@ -187,11 +207,13 @@ pub fn capture_screen_source_jpeg(
 fn encode_jpeg_frame(
     image: image::RgbaImage,
     max_width: u32,
+    max_height: u32,
     quality: u8,
 ) -> Result<ScreenCaptureFrame> {
     let original_width = image.width();
     let original_height = image.height();
-    let (width, height) = scaled_dimensions(original_width, original_height, max_width);
+    let (width, height) =
+        fit_screen_share_dimensions(original_width, original_height, max_width, max_height);
     let output = if (width, height) == (original_width, original_height) {
         image
     } else {
@@ -257,14 +279,32 @@ mod tests {
 
     #[test]
     fn dimensions_scale_down_by_width() {
-        assert_eq!(scaled_dimensions(1920, 1080, 960), (960, 540));
-        assert_eq!(scaled_dimensions(1600, 1200, 800), (800, 600));
-        assert_eq!(scaled_dimensions(800, 600, 1200), (800, 600));
-        assert_eq!(scaled_dimensions(800, 600, 0), (800, 600));
+        assert_eq!(
+            fit_screen_share_dimensions(1920, 1080, 960, 1080),
+            (960, 540)
+        );
+        assert_eq!(
+            fit_screen_share_dimensions(1600, 1200, 800, 1200),
+            (800, 600)
+        );
+        assert_eq!(fit_screen_share_dimensions(800, 600, 1200, 900), (800, 600));
+        assert_eq!(fit_screen_share_dimensions(800, 600, 0, 720), (800, 600));
+    }
+
+    #[test]
+    fn dimensions_scale_down_by_height() {
+        assert_eq!(
+            fit_screen_share_dimensions(1920, 1080, 1920, 720),
+            (1280, 720)
+        );
+        assert_eq!(
+            fit_screen_share_dimensions(1200, 1600, 1920, 800),
+            (600, 800)
+        );
     }
 
     #[test]
     fn dimensions_keep_minimum_height_when_scaling() {
-        assert_eq!(scaled_dimensions(10_000, 1, 100), (100, 1));
+        assert_eq!(fit_screen_share_dimensions(10_000, 1, 100, 100), (100, 1));
     }
 }

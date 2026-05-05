@@ -2,13 +2,14 @@ use crate::{
     fonts,
     net::ClientEvent,
     net::NetworkHandle,
-    screen_share::{start_screen_share, ScreenShareEvent, ScreenShareSession},
+    screen_share::{start_screen_share, ScreenShareEvent, ScreenShareSession, ScreenShareSettings},
     voice::{VoiceSession, VoiceShared},
 };
 use base64::Engine;
 use eframe::egui;
 use light_discord_core::{
-    AuditLogSummary, ChatMessage, ClientFrame, ServerFrame, UserId, UserSummary, VoiceUser,
+    AuditLogSummary, ChatMessage, ClientFrame, ScreenShareMode, ScreenShareResolution, ServerFrame,
+    UserId, UserSummary, VoiceUser, SCREEN_SHARE_CODEC_JPEG,
 };
 use light_discord_platform::{
     available_audio_devices, available_screen_sources, delete_session_token, load_session_token,
@@ -31,6 +32,11 @@ struct RemoteScreenShare {
     source_name: String,
     width: u32,
     height: u32,
+    mode: ScreenShareMode,
+    resolution: ScreenShareResolution,
+    target_fps: u32,
+    codec: String,
+    transport: String,
     latest_frame: Option<egui::ColorImage>,
     latest_sequence: Option<u64>,
     texture: Option<egui::TextureHandle>,
@@ -71,6 +77,9 @@ pub struct LightDiscordApp {
     platform: PlatformInfo,
     screen_sources: Vec<ScreenShareSource>,
     selected_source_id: Option<String>,
+    screen_share_mode: ScreenShareMode,
+    screen_share_resolution: ScreenShareResolution,
+    screen_share_game_fps: u32,
     screen_share_status: String,
     local_screen_share: Option<ScreenShareSession>,
     remote_screen_shares: HashMap<UserId, RemoteScreenShare>,
@@ -129,6 +138,9 @@ impl LightDiscordApp {
             platform: platform_info(),
             screen_sources,
             selected_source_id: None,
+            screen_share_mode: ScreenShareMode::Text,
+            screen_share_resolution: ScreenShareResolution::P720,
+            screen_share_game_fps: 30,
             screen_share_status,
             local_screen_share: None,
             remote_screen_shares: HashMap::new(),
@@ -353,9 +365,19 @@ impl LightDiscordApp {
             return;
         };
 
-        let session = start_screen_share(source, network.command_sender());
+        let settings = ScreenShareSettings::new(
+            self.screen_share_mode,
+            self.screen_share_resolution,
+            self.screen_share_game_fps,
+        );
+        let session = start_screen_share(source, network.command_sender(), settings);
         self.local_screen_share = Some(session);
-        self.screen_share_status = "sharing started".to_owned();
+        self.screen_share_status = format!(
+            "sharing started: {} / {} / {} fps",
+            screen_mode_label(settings.mode),
+            screen_resolution_label(settings.resolution),
+            settings.target_fps()
+        );
     }
 
     fn stop_screen_share(&mut self) {
@@ -444,6 +466,12 @@ impl LightDiscordApp {
                 source_name,
                 width,
                 height,
+                mode,
+                resolution,
+                target_fps,
+                active_codec,
+                transport,
+                ..
             } => {
                 self.remote_screen_shares.insert(
                     user_id,
@@ -452,6 +480,11 @@ impl LightDiscordApp {
                         source_name,
                         width,
                         height,
+                        mode,
+                        resolution,
+                        target_fps,
+                        codec: active_codec,
+                        transport,
                         latest_frame: None,
                         latest_sequence: None,
                         texture: None,
@@ -467,6 +500,11 @@ impl LightDiscordApp {
                 display_name,
                 width,
                 height,
+                mode,
+                resolution,
+                target_fps,
+                codec,
+                transport,
                 sequence,
                 data_base64,
                 ..
@@ -479,6 +517,11 @@ impl LightDiscordApp {
                             source_name: "Screen share".to_owned(),
                             width,
                             height,
+                            mode,
+                            resolution,
+                            target_fps,
+                            codec: codec.clone(),
+                            transport: transport.clone(),
                             latest_frame: None,
                             latest_sequence: None,
                             texture: None,
@@ -495,7 +538,17 @@ impl LightDiscordApp {
                 remote_share.display_name = display_name;
                 remote_share.width = width;
                 remote_share.height = height;
+                remote_share.mode = mode;
+                remote_share.resolution = resolution;
+                remote_share.target_fps = target_fps;
+                remote_share.codec = codec.clone();
+                remote_share.transport = transport;
                 remote_share.latest_sequence = Some(sequence);
+                if codec != SCREEN_SHARE_CODEC_JPEG {
+                    remote_share.latest_frame = None;
+                    remote_share.status = format!("unsupported codec: {codec}");
+                    return;
+                }
                 match base64::engine::general_purpose::STANDARD.decode(&data_base64) {
                     Ok(decoded) => match decode_remote_screen_frame(&decoded) {
                         Ok(frame) => {
@@ -763,6 +816,53 @@ impl eframe::App for LightDiscordApp {
                 } else {
                     ui.label("No sources");
                 }
+                ui.add_enabled_ui(!sharing, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Mode");
+                        egui::ComboBox::from_id_source("screen_share_mode")
+                            .selected_text(screen_mode_label(self.screen_share_mode))
+                            .width(110.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.screen_share_mode,
+                                    ScreenShareMode::Text,
+                                    screen_mode_label(ScreenShareMode::Text),
+                                );
+                                ui.selectable_value(
+                                    &mut self.screen_share_mode,
+                                    ScreenShareMode::Game,
+                                    screen_mode_label(ScreenShareMode::Game),
+                                );
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Resolution");
+                        egui::ComboBox::from_id_source("screen_share_resolution")
+                            .selected_text(screen_resolution_label(self.screen_share_resolution))
+                            .width(110.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.screen_share_resolution,
+                                    ScreenShareResolution::P1080,
+                                    screen_resolution_label(ScreenShareResolution::P1080),
+                                );
+                                ui.selectable_value(
+                                    &mut self.screen_share_resolution,
+                                    ScreenShareResolution::P720,
+                                    screen_resolution_label(ScreenShareResolution::P720),
+                                );
+                            });
+                    });
+                    if self.screen_share_mode == ScreenShareMode::Game {
+                        ui.horizontal(|ui| {
+                            ui.label("FPS");
+                            ui.selectable_value(&mut self.screen_share_game_fps, 30, "30");
+                            ui.selectable_value(&mut self.screen_share_game_fps, 60, "60");
+                        });
+                    } else {
+                        ui.small("5 FPS");
+                    }
+                });
                 ui.horizontal(|ui| {
                     if ui
                         .add_enabled(
@@ -865,8 +965,15 @@ impl eframe::App for LightDiscordApp {
                         ui.label(&remote_share.status);
                     }
                     ui.small(format!(
-                        "{}x{} / {}",
-                        remote_share.width, remote_share.height, remote_share.status
+                        "{}x{} / {} / {} fps / {} / {} / {} / {}",
+                        remote_share.width,
+                        remote_share.height,
+                        screen_mode_label(remote_share.mode),
+                        remote_share.target_fps,
+                        screen_resolution_label(remote_share.resolution),
+                        remote_share.codec,
+                        remote_share.transport,
+                        remote_share.status
                     ));
                     ui.separator();
                 }
@@ -1025,6 +1132,20 @@ fn audio_device_label(device: &AudioDeviceInfo) -> String {
         (true, false) => format!("{} (default)", device.name),
         (false, true) => format!("{} ({} variants)", device.name, device.grouped_count),
         (false, false) => device.name.clone(),
+    }
+}
+
+fn screen_mode_label(mode: ScreenShareMode) -> &'static str {
+    match mode {
+        ScreenShareMode::Text => "Text",
+        ScreenShareMode::Game => "Game",
+    }
+}
+
+fn screen_resolution_label(resolution: ScreenShareResolution) -> &'static str {
+    match resolution {
+        ScreenShareResolution::P1080 => "1080p",
+        ScreenShareResolution::P720 => "720p",
     }
 }
 

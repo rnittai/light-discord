@@ -58,6 +58,79 @@ impl ChatMessage {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenShareMode {
+    Text,
+    Game,
+}
+
+impl Default for ScreenShareMode {
+    fn default() -> Self {
+        Self::Text
+    }
+}
+
+impl ScreenShareMode {
+    pub fn default_fps(self) -> u32 {
+        match self {
+            Self::Text => 5,
+            Self::Game => 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ScreenShareResolution {
+    #[serde(rename = "1080p")]
+    P1080,
+    #[serde(rename = "720p")]
+    P720,
+}
+
+impl Default for ScreenShareResolution {
+    fn default() -> Self {
+        Self::P720
+    }
+}
+
+impl ScreenShareResolution {
+    pub fn max_dimensions(self) -> (u32, u32) {
+        match self {
+            Self::P1080 => (1920, 1080),
+            Self::P720 => (1280, 720),
+        }
+    }
+}
+
+pub const SCREEN_SHARE_CODEC_AV1: &str = "av1";
+pub const SCREEN_SHARE_CODEC_VP9: &str = "vp9";
+pub const SCREEN_SHARE_CODEC_JPEG: &str = "jpeg";
+pub const SCREEN_SHARE_TRANSPORT_SFU_RELAY: &str = "sfu_relay";
+
+pub fn default_screen_share_target_fps() -> u32 {
+    ScreenShareMode::default().default_fps()
+}
+
+pub fn default_screen_share_requested_codecs() -> Vec<String> {
+    [
+        SCREEN_SHARE_CODEC_AV1,
+        SCREEN_SHARE_CODEC_VP9,
+        SCREEN_SHARE_CODEC_JPEG,
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+pub fn default_screen_share_active_codec() -> String {
+    SCREEN_SHARE_CODEC_JPEG.to_owned()
+}
+
+pub fn default_screen_share_transport() -> String {
+    SCREEN_SHARE_TRANSPORT_SFU_RELAY.to_owned()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientFrame {
@@ -103,12 +176,26 @@ pub enum ClientFrame {
         source_name: String,
         width: u32,
         height: u32,
+        #[serde(default)]
+        mode: ScreenShareMode,
+        #[serde(default)]
+        resolution: ScreenShareResolution,
+        #[serde(default = "default_screen_share_target_fps")]
+        target_fps: u32,
+        #[serde(default = "default_screen_share_requested_codecs")]
+        requested_codecs: Vec<String>,
+        #[serde(default = "default_screen_share_transport")]
+        transport: String,
     },
     StopScreenShare,
     ScreenShareFrame {
         width: u32,
         height: u32,
         image_format: String,
+        #[serde(default = "default_screen_share_active_codec")]
+        codec: String,
+        #[serde(default = "default_screen_share_transport")]
+        transport: String,
         data_base64: String,
         sequence: u64,
         unix_ms: u64,
@@ -156,6 +243,18 @@ pub enum ServerFrame {
         source_name: String,
         width: u32,
         height: u32,
+        #[serde(default)]
+        mode: ScreenShareMode,
+        #[serde(default)]
+        resolution: ScreenShareResolution,
+        #[serde(default = "default_screen_share_target_fps")]
+        target_fps: u32,
+        #[serde(default = "default_screen_share_requested_codecs")]
+        requested_codecs: Vec<String>,
+        #[serde(default = "default_screen_share_active_codec")]
+        active_codec: String,
+        #[serde(default = "default_screen_share_transport")]
+        transport: String,
     },
     ScreenShareStopped {
         user_id: UserId,
@@ -166,6 +265,16 @@ pub enum ServerFrame {
         width: u32,
         height: u32,
         image_format: String,
+        #[serde(default)]
+        mode: ScreenShareMode,
+        #[serde(default)]
+        resolution: ScreenShareResolution,
+        #[serde(default = "default_screen_share_target_fps")]
+        target_fps: u32,
+        #[serde(default = "default_screen_share_active_codec")]
+        codec: String,
+        #[serde(default = "default_screen_share_transport")]
+        transport: String,
         data_base64: String,
         sequence: u64,
         unix_ms: u64,
@@ -675,13 +784,40 @@ mod tests {
             source_name: "My Display".to_owned(),
             width: 1920,
             height: 1080,
+            mode: ScreenShareMode::Game,
+            resolution: ScreenShareResolution::P1080,
+            target_fps: 60,
+            requested_codecs: default_screen_share_requested_codecs(),
+            transport: SCREEN_SHARE_TRANSPORT_SFU_RELAY.to_owned(),
         };
 
         let json = serde_json::to_string(&frame).unwrap();
         assert!(json.contains("\"type\":\"start_screen_share\""));
+        assert!(json.contains("\"mode\":\"game\""));
+        assert!(json.contains("\"resolution\":\"1080p\""));
 
         let decoded = serde_json::from_str::<ClientFrame>(&json).unwrap();
         assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn client_frame_start_screen_share_defaults_legacy_metadata() {
+        let json = br#"{"type":"start_screen_share","source_name":"My Display","width":1920,"height":1080}"#;
+        let decoded = serde_json::from_slice::<ClientFrame>(json).unwrap();
+
+        assert_eq!(
+            decoded,
+            ClientFrame::StartScreenShare {
+                source_name: "My Display".to_owned(),
+                width: 1920,
+                height: 1080,
+                mode: ScreenShareMode::Text,
+                resolution: ScreenShareResolution::P720,
+                target_fps: 5,
+                requested_codecs: default_screen_share_requested_codecs(),
+                transport: SCREEN_SHARE_TRANSPORT_SFU_RELAY.to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -701,6 +837,8 @@ mod tests {
             width: 1920,
             height: 1080,
             image_format: "jpeg".to_owned(),
+            codec: SCREEN_SHARE_CODEC_JPEG.to_owned(),
+            transport: SCREEN_SHARE_TRANSPORT_SFU_RELAY.to_owned(),
             data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
             sequence: 42,
             unix_ms: 1672531200000,
@@ -721,6 +859,12 @@ mod tests {
             source_name: "My Display".to_owned(),
             width: 1920,
             height: 1080,
+            mode: ScreenShareMode::Text,
+            resolution: ScreenShareResolution::P1080,
+            target_fps: 5,
+            requested_codecs: default_screen_share_requested_codecs(),
+            active_codec: SCREEN_SHARE_CODEC_JPEG.to_owned(),
+            transport: SCREEN_SHARE_TRANSPORT_SFU_RELAY.to_owned(),
         };
 
         let json = serde_json::to_string(&frame).unwrap();
@@ -751,6 +895,11 @@ mod tests {
             width: 1920,
             height: 1080,
             image_format: "jpeg".to_owned(),
+            mode: ScreenShareMode::Game,
+            resolution: ScreenShareResolution::P1080,
+            target_fps: 30,
+            codec: SCREEN_SHARE_CODEC_JPEG.to_owned(),
+            transport: SCREEN_SHARE_TRANSPORT_SFU_RELAY.to_owned(),
             data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
             sequence: 42,
             unix_ms: 1672531200000,

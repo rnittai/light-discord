@@ -3,8 +3,9 @@ use light_discord_auth::{
     hash_password, hash_token, new_invite_code, new_session_token, verify_password,
 };
 use light_discord_core::{
-    decode_voice_packet_binary, ChannelId, ChatMessage, ClientFrame, RoomId, ServerFrame, UserId,
-    UserSummary, VoiceUser,
+    decode_voice_packet_binary, ChannelId, ChatMessage, ClientFrame, RoomId, ScreenShareMode,
+    ScreenShareResolution, ServerFrame, UserId, UserSummary, VoiceUser, SCREEN_SHARE_CODEC_AV1,
+    SCREEN_SHARE_CODEC_JPEG, SCREEN_SHARE_CODEC_VP9, SCREEN_SHARE_TRANSPORT_SFU_RELAY,
 };
 use light_discord_storage::{CreateAccountResult, DeleteMessageResult, Storage};
 use std::{
@@ -34,12 +35,19 @@ struct ScreenShareInfo {
     source_name: String,
     width: u32,
     height: u32,
+    mode: ScreenShareMode,
+    resolution: ScreenShareResolution,
+    target_fps: u32,
+    active_codec: String,
+    transport: String,
 }
 
 struct ScreenShareFramePayload {
     width: u32,
     height: u32,
     image_format: String,
+    codec: String,
+    transport: String,
     data_base64: String,
     sequence: u64,
     unix_ms: u64,
@@ -148,6 +156,22 @@ impl AppState {
                 .users
                 .values()
                 .map(|user| user.tx.clone())
+                .collect::<Vec<_>>()
+        };
+
+        for tx in targets {
+            let _ = tx.send(frame.clone());
+        }
+    }
+
+    async fn broadcast_except(&self, excluded_user_id: &str, frame: ServerFrame) {
+        let targets = {
+            let inner = self.inner.read().await;
+            inner
+                .users
+                .iter()
+                .filter(|(user_id, _)| user_id.as_str() != excluded_user_id)
+                .map(|(_, user)| user.tx.clone())
                 .collect::<Vec<_>>()
         };
 
@@ -438,6 +462,11 @@ impl AppState {
         source_name: String,
         width: u32,
         height: u32,
+        mode: ScreenShareMode,
+        resolution: ScreenShareResolution,
+        target_fps: u32,
+        requested_codecs: Vec<String>,
+        transport: String,
     ) {
         let trimmed_source = source_name.trim();
         if trimmed_source.is_empty() {
@@ -462,6 +491,43 @@ impl AppState {
             return;
         }
 
+        if !is_valid_screen_share_fps(mode, target_fps) {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: format!(
+                        "invalid screen share fps {target_fps} for {} mode",
+                        screen_share_mode_name(mode)
+                    ),
+                },
+            )
+            .await;
+            return;
+        }
+
+        if transport.trim() != SCREEN_SHARE_TRANSPORT_SFU_RELAY {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: "unsupported screen share transport".to_owned(),
+                },
+            )
+            .await;
+            return;
+        }
+
+        let requested_codecs = normalize_requested_screen_share_codecs(requested_codecs);
+        let Some(active_codec) = negotiate_screen_share_codec(&requested_codecs) else {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: "no supported screen share codec requested".to_owned(),
+                },
+            )
+            .await;
+            return;
+        };
+
         let display_name = {
             let inner = self.inner.read().await;
             inner.users.get(user_id).map(|u| u.display_name.clone())
@@ -479,17 +545,31 @@ impl AppState {
                     source_name: trimmed_source.to_owned(),
                     width,
                     height,
+                    mode,
+                    resolution,
+                    target_fps,
+                    active_codec: active_codec.clone(),
+                    transport: SCREEN_SHARE_TRANSPORT_SFU_RELAY.to_owned(),
                 },
             );
         }
 
-        self.broadcast(ServerFrame::ScreenShareStarted {
-            user_id: user_id.to_owned(),
-            display_name,
-            source_name: trimmed_source.to_owned(),
-            width,
-            height,
-        })
+        self.broadcast_except(
+            user_id,
+            ServerFrame::ScreenShareStarted {
+                user_id: user_id.to_owned(),
+                display_name,
+                source_name: trimmed_source.to_owned(),
+                width,
+                height,
+                mode,
+                resolution,
+                target_fps,
+                requested_codecs,
+                active_codec,
+                transport: SCREEN_SHARE_TRANSPORT_SFU_RELAY.to_owned(),
+            },
+        )
         .await;
     }
 
@@ -500,9 +580,12 @@ impl AppState {
         };
 
         if had_share {
-            self.broadcast(ServerFrame::ScreenShareStopped {
-                user_id: user_id.to_owned(),
-            })
+            self.broadcast_except(
+                user_id,
+                ServerFrame::ScreenShareStopped {
+                    user_id: user_id.to_owned(),
+                },
+            )
             .await;
         }
     }
@@ -530,6 +613,29 @@ impl AppState {
             return;
         }
 
+        let frame_codec = normalize_screen_share_codec(&frame.codec);
+        if frame_codec.is_empty() {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: "codec cannot be empty".to_owned(),
+                },
+            )
+            .await;
+            return;
+        }
+
+        if frame.transport.trim() != SCREEN_SHARE_TRANSPORT_SFU_RELAY {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: "unsupported screen share transport".to_owned(),
+                },
+            )
+            .await;
+            return;
+        }
+
         if frame.data_base64.trim().is_empty() {
             self.send_to(
                 user_id,
@@ -543,15 +649,33 @@ impl AppState {
 
         let (display_name, active_share) = {
             let inner = self.inner.read().await;
-            let active_share = inner
-                .screen_shares
-                .get(user_id)
-                .map(|info| (info.source_name.clone(), info.width, info.height));
+            let active_share = inner.screen_shares.get(user_id).map(|info| {
+                (
+                    info.source_name.clone(),
+                    info.width,
+                    info.height,
+                    info.mode,
+                    info.resolution,
+                    info.target_fps,
+                    info.active_codec.clone(),
+                    info.transport.clone(),
+                )
+            });
             let display_name = inner.users.get(user_id).map(|u| u.display_name.clone());
             (display_name, active_share)
         };
 
-        let Some((source_name, declared_width, declared_height)) = active_share else {
+        let Some((
+            source_name,
+            declared_width,
+            declared_height,
+            mode,
+            resolution,
+            target_fps,
+            active_codec,
+            transport,
+        )) = active_share
+        else {
             self.send_to(
                 user_id,
                 ServerFrame::Error {
@@ -561,6 +685,32 @@ impl AppState {
             .await;
             return;
         };
+
+        if frame_codec != active_codec {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: format!(
+                        "frame codec {frame_codec} does not match negotiated codec {active_codec}"
+                    ),
+                },
+            )
+            .await;
+            return;
+        }
+
+        if active_codec == SCREEN_SHARE_CODEC_JPEG
+            && frame.image_format.trim().to_ascii_lowercase() != SCREEN_SHARE_CODEC_JPEG
+        {
+            self.send_to(
+                user_id,
+                ServerFrame::Error {
+                    message: "jpeg screen share frames must use image_format=jpeg".to_owned(),
+                },
+            )
+            .await;
+            return;
+        }
 
         if frame.width > declared_width || frame.height > declared_height {
             self.send_to(
@@ -574,16 +724,24 @@ impl AppState {
         }
 
         if let Some(display_name) = display_name {
-            self.broadcast(ServerFrame::ScreenShareFrame {
-                user_id: user_id.to_owned(),
-                display_name,
-                width: frame.width,
-                height: frame.height,
-                image_format: frame.image_format,
-                data_base64: frame.data_base64,
-                sequence: frame.sequence,
-                unix_ms: frame.unix_ms,
-            })
+            self.broadcast_except(
+                user_id,
+                ServerFrame::ScreenShareFrame {
+                    user_id: user_id.to_owned(),
+                    display_name,
+                    width: frame.width,
+                    height: frame.height,
+                    image_format: frame.image_format,
+                    mode,
+                    resolution,
+                    target_fps,
+                    codec: active_codec,
+                    transport,
+                    data_base64: frame.data_base64,
+                    sequence: frame.sequence,
+                    unix_ms: frame.unix_ms,
+                },
+            )
             .await;
         }
     }
@@ -751,9 +909,24 @@ async fn handle_client(
                 source_name,
                 width,
                 height,
+                mode,
+                resolution,
+                target_fps,
+                requested_codecs,
+                transport,
             }) => {
                 state
-                    .start_screen_share(&authenticated.user_id, source_name, width, height)
+                    .start_screen_share(
+                        &authenticated.user_id,
+                        source_name,
+                        width,
+                        height,
+                        mode,
+                        resolution,
+                        target_fps,
+                        requested_codecs,
+                        transport,
+                    )
                     .await;
             }
             Ok(ClientFrame::StopScreenShare) => {
@@ -763,6 +936,8 @@ async fn handle_client(
                 width,
                 height,
                 image_format,
+                codec,
+                transport,
                 data_base64,
                 sequence,
                 unix_ms,
@@ -774,6 +949,8 @@ async fn handle_client(
                             width,
                             height,
                             image_format,
+                            codec,
+                            transport,
                             data_base64,
                             sequence,
                             unix_ms,
@@ -1007,5 +1184,88 @@ fn normalize_display_name(name: String) -> String {
         "guest".to_owned()
     } else {
         trimmed.chars().take(32).collect()
+    }
+}
+
+fn normalize_screen_share_codec(codec: &str) -> String {
+    codec.trim().to_ascii_lowercase()
+}
+
+fn normalize_requested_screen_share_codecs(codecs: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for codec in codecs {
+        let codec = normalize_screen_share_codec(&codec);
+        if codec.is_empty() || normalized.contains(&codec) {
+            continue;
+        }
+        normalized.push(codec);
+    }
+
+    if normalized.is_empty() {
+        vec![
+            SCREEN_SHARE_CODEC_AV1.to_owned(),
+            SCREEN_SHARE_CODEC_VP9.to_owned(),
+            SCREEN_SHARE_CODEC_JPEG.to_owned(),
+        ]
+    } else {
+        normalized
+    }
+}
+
+fn negotiate_screen_share_codec(requested_codecs: &[String]) -> Option<String> {
+    for codec in requested_codecs {
+        if normalize_screen_share_codec(codec) == SCREEN_SHARE_CODEC_JPEG {
+            return Some(SCREEN_SHARE_CODEC_JPEG.to_owned());
+        }
+    }
+    None
+}
+
+fn is_valid_screen_share_fps(mode: ScreenShareMode, target_fps: u32) -> bool {
+    match mode {
+        ScreenShareMode::Text => (1..=15).contains(&target_fps),
+        ScreenShareMode::Game => matches!(target_fps, 30 | 60),
+    }
+}
+
+fn screen_share_mode_name(mode: ScreenShareMode) -> &'static str {
+    match mode {
+        ScreenShareMode::Text => "text",
+        ScreenShareMode::Game => "game",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screen_share_codec_negotiation_rejects_unsupported_only() {
+        let requested = vec![
+            SCREEN_SHARE_CODEC_AV1.to_owned(),
+            SCREEN_SHARE_CODEC_VP9.to_owned(),
+        ];
+        assert_eq!(negotiate_screen_share_codec(&requested), None);
+    }
+
+    #[test]
+    fn screen_share_codec_negotiation_uses_jpeg_when_requested() {
+        let requested = vec![
+            SCREEN_SHARE_CODEC_AV1.to_owned(),
+            SCREEN_SHARE_CODEC_JPEG.to_owned(),
+        ];
+        assert_eq!(
+            negotiate_screen_share_codec(&requested),
+            Some(SCREEN_SHARE_CODEC_JPEG.to_owned())
+        );
+    }
+
+    #[test]
+    fn screen_share_fps_validation_matches_modes() {
+        assert!(is_valid_screen_share_fps(ScreenShareMode::Text, 5));
+        assert!(!is_valid_screen_share_fps(ScreenShareMode::Text, 30));
+        assert!(is_valid_screen_share_fps(ScreenShareMode::Game, 30));
+        assert!(is_valid_screen_share_fps(ScreenShareMode::Game, 60));
+        assert!(!is_valid_screen_share_fps(ScreenShareMode::Game, 5));
     }
 }

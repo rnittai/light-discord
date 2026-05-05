@@ -18,7 +18,7 @@ Light Discord is split into four Rust crates so Windows and Linux support can sh
 
 The current voice path implements room membership, binary-framed UDP packet relay, and `cpal` device enumeration for native input/output selection. UDP voice payloads are encoded and decoded with `encode_voice_packet_binary`/`decode_voice_packet_binary` (magic/version header, length-prefixed `user_id`/`room_id`, sequence/sample_rate/channels/codec/frame_samples fields, and raw payload bytes). TCP chat/control remains newline-delimited JSON. The audio backend trait is present; `CpalAudioBackend` in `light-discord-platform` provides the full Opus 48 kHz capture/playback pipeline with jitter buffering.
 
-Screen sharing is implemented as an MVP transport over the existing TCP JSON control connection. Platform capture uses `xcap` on Linux/Windows to enumerate displays and non-minimized windows. The client sends downscaled JPEG frames as base64-encoded strings within `ScreenShareFrame` messages. The server broadcasts authenticated `ScreenShareStarted`, `ScreenShareStopped`, and `ScreenShareFrame` messages to all clients in the room without decoding the frame data. This MVP is suitable for friend/self-hosted validation but not production use; future work should move to a dedicated binary/video transport with proper codec, rate control, and encryption support.
+Screen sharing is implemented as an SFU-style MVP relay over the existing TCP JSON control connection. Platform capture uses `xcap` on Linux/Windows to enumerate displays and non-minimized windows. The client sends one downscaled frame stream to the server, and the server selectively forwards `ScreenShareFrame` messages to other connected clients without echoing frames back to the sender. The protocol carries mode (`text` or `game`), resolution cap (`1080p` or `720p`), target FPS, requested codec preferences, negotiated active codec, and transport metadata. Clients advertise AV1/VP9/JPEG preferences, but the current native encoder path only produces JPEG frames, so the server negotiates JPEG as the active fallback until a real AV1/VP9 video encoder and binary media transport are added. Text mode uses low FPS and higher JPEG quality for readability; game mode allows 30 FPS or 60 FPS with lower JPEG quality. This MVP is suitable for friend/self-hosted validation but not production use; future work should move to a dedicated binary/video transport with proper codec, rate control, and encryption support.
 
 ## Persistence and Audit Boundary
 
@@ -46,9 +46,9 @@ Admin-only protocol:
 
 Screen sharing protocol:
 
-- `ScreenShareStarted`: sent by server when a client starts broadcasting; includes the broadcasting user's ID.
-- `ScreenShareStopped`: sent by server when a client stops broadcasting.
-- `ScreenShareFrame`: contains a base64-encoded JPEG frame; sent by client and relayed by server to all room members. Server does not validate frame format or contents.
+- `ScreenShareStarted`: sent by server to other connected clients when a client starts broadcasting; includes the broadcasting user's ID, selected mode, resolution cap, FPS target, requested codecs, negotiated codec, and relay transport.
+- `ScreenShareStopped`: sent by server to other connected clients when a client stops broadcasting.
+- `ScreenShareFrame`: contains a base64-encoded JPEG frame today; sent by the sharing client and relayed by the server to other connected clients. The server validates dimensions, transport, and negotiated codec metadata, but does not decode the frame body.
 
 ## Runtime Ports
 
