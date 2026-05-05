@@ -108,7 +108,7 @@ cargo run -p light-discord-client
 - `Password`: `LD_BOOTSTRAP_ADMIN_PASSWORD` に設定した値
 - `Connect`
 
-ログインに成功すると、サーバーは session token を返します。現在のクライアントはその token をメモリ上に保持します。まだファイル保存はしていません。
+ログインに成功すると、サーバーは session token を返します。クライアントは token を永続的に保存します。
 
 ## 3. 友達を招待する
 
@@ -143,13 +143,20 @@ cargo run -p light-discord-client
 
 ## 6. セッション再開
 
-セッション token がある場合は次のように接続できます。
+クライアントは起動時に default server (127.0.0.1:41610) の保存済み token を読み込み、見つかった場合は自動的に `Session` mode を選択します。以下のように接続できます。
 
 - auth mode: `Session`
-- `Session token`: 以前返された token
+- `Load` ボタンで現在のサーバーアドレスの token を読み込む
 - `Connect`
 
-現時点ではクライアントが session token をディスクへ保存しないため、アプリを終了すると token は失われます。永続保存は今後の実装対象です。
+`Forget` ボタンで現在のサーバーアドレスの token を削除できます。
+
+Token storage の詳細:
+
+- ログイン/登録後、クライアントは server が返した token を永続的に保存します。
+- サーバーごとに SHA-256 導出キーで保存 (raw address はファイル名/キーとして使用されない)。
+- 優先的には OS credential store を使用: Windows では Windows Credential Store、Linux では keyutils + Secret Service が使用可能な場合。
+- keyring が利用不可の場合、制限付きローカルファイルに fallback: Linux は `$XDG_CONFIG_HOME/light-discord/session-tokens` または `$HOME/.config/light-discord/session-tokens`; Windows は `%APPDATA%\LightDiscord\session-tokens` または `%USERPROFILE%\AppData\Roaming\LightDiscord\session-tokens`。テスト/開発時は `LIGHT_DISCORD_CONFIG_DIR` で root をオーバーライド可能。Unix ファイルは `0600` 権限で書き込みされます。
 
 ## 7. チャットと削除
 

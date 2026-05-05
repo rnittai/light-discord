@@ -33,6 +33,10 @@ Authentication modes:
 - `ResumeSession`: previously issued session token.
 - `Hello`: development-only display-name login. Enabled by default only when the server runs without PostgreSQL.
 
+Session Token Persistence:
+
+The client saves session tokens after successful Login or Register. On startup, it loads the saved token for the default server (127.0.0.1:41610) and auto-selects `Session` mode if found. Storage is per-server using a SHA-256-derived key. The preferred storage uses OS credential stores (Windows Credential Store, Linux keyutils + Secret Service when available); fallback is a restricted local file with mode `0600` on Unix. Paths: Linux `$XDG_CONFIG_HOME/light-discord/session-tokens` or `$HOME/.config/light-discord/session-tokens`; Windows `%APPDATA%\LightDiscord\session-tokens` or `%USERPROFILE%\AppData\Roaming\LightDiscord\session-tokens`. Override the root with `LIGHT_DISCORD_CONFIG_DIR` for tests/dev.
+
 Admin-only protocol:
 
 - `AdminCreateInvite`: creates a one-time invite code.

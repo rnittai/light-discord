@@ -159,7 +159,7 @@ cargo run -p light-discord-client
 
 5. A friend chooses `Register`, enters the invite code, display name, and password, then connects.
 
-6. After registration, use `Login` with display name and password. The server returns a session token; the current client keeps it in memory for `Session` mode after disconnect.
+6. After registration, use `Login` with display name and password. The server returns a session token; the client saves it persistently for `Session` mode.
 
 7. To inspect deleted-message audit records, connect as admin and press `Audit` in the admin panel.
 
@@ -171,9 +171,17 @@ Voice device selection and controls:
 - `Mute mic` stops outgoing audio while keeping the voice-room heartbeat. `Deafen` stops remote playback (and implicitly mutes the mic).
 - The voice user list shows a green `*` marker and name for users currently emitting audible audio, including yourself.
 
+Session token storage:
+
+- The client saves session tokens after successful Login or Register when the server returns one.
+- On startup, the client loads the saved token for the default server (127.0.0.1:41610) and auto-selects `Session` mode if found.
+- In `Session` mode, `Load` and `Forget` buttons manage the token for the current server address.
+- Storage is per-server using a SHA-256-derived key (raw address is not used as a filename/key).
+- Preferred storage uses OS credential stores: Windows Credential Store on Windows; Linux keyutils + Secret Service when available.
+- If keyring is unavailable, the client falls back to a restricted local file: Linux `$XDG_CONFIG_HOME/light-discord/session-tokens` or `$HOME/.config/light-discord/session-tokens`; Windows `%APPDATA%\LightDiscord\session-tokens` or `%USERPROFILE%\AppData\Roaming\LightDiscord\session-tokens`. Set `LIGHT_DISCORD_CONFIG_DIR` to override the root for tests/dev. Unix files are written with permissions `0600`.
+
 Current limitations:
 
-- Session tokens are not persisted to disk by the client yet.
 - Account management, password reset, role management, TLS setup are still future work.
 - There is no SRTP/encryption, no Opus DTX (closed-gate frames are suppressed by the RMS noise gate at the source, not by the codec), no adaptive bitrate, and no real acoustic echo cancellation — only a simple mic-ducking heuristic that attenuates the microphone when remote playback is loud. The voice path is fine for friend-group calls but is not Discord-grade.
 - The client UI is intentionally minimal and aimed at validating the backend flow first.

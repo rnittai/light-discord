@@ -9,8 +9,8 @@ use light_discord_core::{
     AuditLogSummary, ChatMessage, ClientFrame, ServerFrame, UserSummary, VoiceUser,
 };
 use light_discord_platform::{
-    available_audio_devices, platform_info, AudioDeviceInfo, AudioDeviceList, AudioDeviceSelection,
-    PlatformInfo,
+    available_audio_devices, delete_session_token, load_session_token, platform_info,
+    save_session_token, AudioDeviceInfo, AudioDeviceList, AudioDeviceSelection, PlatformInfo,
 };
 use std::sync::Arc;
 
@@ -28,6 +28,7 @@ pub struct LightDiscordApp {
     password: String,
     invite_code: String,
     session_token: String,
+    session_token_status: String,
     auth_mode: AuthMode,
     status: String,
     channel_id: String,
@@ -68,13 +69,18 @@ impl LightDiscordApp {
             audio_device_status,
         ) = load_audio_devices();
 
+        let default_server = "127.0.0.1:41610";
+        let (auth_mode, session_token, session_token_status) =
+            load_default_session_token(default_server);
+
         Self {
-            server_addr: "127.0.0.1:41610".to_owned(),
+            server_addr: default_server.to_owned(),
             display_name: whoami_fallback(),
             password: String::new(),
             invite_code: String::new(),
-            session_token: String::new(),
-            auth_mode: AuthMode::Login,
+            session_token,
+            session_token_status,
+            auth_mode,
             status,
             channel_id: "general".to_owned(),
             voice_room_id: "voice-general".to_owned(),
@@ -106,6 +112,12 @@ impl LightDiscordApp {
         if self.connected {
             return;
         }
+
+        if self.auth_mode == AuthMode::Session && self.session_token.trim().is_empty() {
+            self.status = "session token is empty".to_owned();
+            return;
+        }
+
         self.status = "connecting".to_owned();
         self.messages.clear();
         self.users.clear();
@@ -289,8 +301,9 @@ impl LightDiscordApp {
                 self.is_admin = is_admin;
                 self.channel_id = default_channel;
                 self.udp_voice_addr = Some(udp_voice_addr);
-                if let Some(session_token) = session_token {
-                    self.session_token = session_token;
+                if let Some(ref token) = session_token {
+                    self.session_token = token.clone();
+                    self.save_and_update_session_token(token);
                 }
                 self.connected = true;
                 self.status = "connected".to_owned();
@@ -331,6 +344,44 @@ impl LightDiscordApp {
             }
             ServerFrame::Error { message } => {
                 self.status = message;
+            }
+        }
+    }
+
+    fn save_and_update_session_token(&mut self, token: &str) {
+        match save_session_token(&self.server_addr, token) {
+            Ok(store) => {
+                self.session_token_status = format!("saved to {}", store_name(store));
+            }
+            Err(_) => {
+                self.session_token_status = "failed to save token".to_owned();
+            }
+        }
+    }
+
+    fn load_session_token_for_server(&mut self) {
+        match load_session_token(&self.server_addr) {
+            Ok(Some(stored)) => {
+                self.session_token = stored.token;
+                self.session_token_status = format!("loaded from {}", store_name(stored.store));
+            }
+            Ok(None) => {
+                self.session_token_status = "no saved token found".to_owned();
+            }
+            Err(_) => {
+                self.session_token_status = "failed to load token".to_owned();
+            }
+        }
+    }
+
+    fn forget_session_token(&mut self) {
+        match delete_session_token(&self.server_addr) {
+            Ok(()) => {
+                self.session_token.clear();
+                self.session_token_status = "token deleted".to_owned();
+            }
+            Err(_) => {
+                self.session_token_status = "failed to delete token".to_owned();
             }
         }
     }
@@ -382,6 +433,14 @@ impl eframe::App for LightDiscordApp {
                             .hint_text("Session token")
                             .desired_width(220.0),
                     );
+                    if !self.connected {
+                        if ui.button("Load").clicked() {
+                            self.load_session_token_for_server();
+                        }
+                        if ui.button("Forget").clicked() {
+                            self.forget_session_token();
+                        }
+                    }
                 }
 
                 if self.connected {
@@ -395,6 +454,9 @@ impl eframe::App for LightDiscordApp {
                 ui.separator();
                 let role = if self.is_admin { "admin" } else { "user" };
                 ui.label(format!("{} / {} / {}", self.status, self.platform.os, role));
+                if !self.session_token_status.is_empty() {
+                    ui.small(format!("session: {}", self.session_token_status));
+                }
             });
         });
 
@@ -600,6 +662,24 @@ impl eframe::App for LightDiscordApp {
         });
 
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+}
+
+fn load_default_session_token(server_addr: &str) -> (AuthMode, String, String) {
+    match load_session_token(server_addr) {
+        Ok(Some(stored)) => {
+            let status = format!("loaded from {}", store_name(stored.store));
+            (AuthMode::Session, stored.token, status)
+        }
+        Ok(None) => (AuthMode::Login, String::new(), String::new()),
+        Err(_) => (AuthMode::Login, String::new(), String::new()),
+    }
+}
+
+fn store_name(store: light_discord_platform::SessionTokenStore) -> &'static str {
+    match store {
+        light_discord_platform::SessionTokenStore::Keyring => "keyring",
+        light_discord_platform::SessionTokenStore::File => "file",
     }
 }
 

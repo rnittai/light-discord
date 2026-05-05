@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod os;
+pub mod session_token;
 pub mod voice;
 
 pub use audio::{
@@ -8,6 +9,10 @@ pub use audio::{
     NoopAudioBackend,
 };
 pub use os::{platform_info, PlatformInfo};
+pub use session_token::{
+    delete_session_token, load_session_token, save_session_token, SessionTokenStore,
+    StoredSessionToken,
+};
 pub use voice::{
     drain_frames, duck_mic_against_remote, frame_rms, resample_linear_mono, HighPassFilter,
     JitterBuffer, JitterPop, NoiseGate, OPUS_FRAME_SAMPLES, OPUS_MAX_PACKET_BYTES,

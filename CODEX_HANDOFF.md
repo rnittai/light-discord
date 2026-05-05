@@ -225,7 +225,6 @@ At the time of this handoff, `main` was pushed to `origin/main`.
 
 ## Current Known Limitations
 
-- Client session token is kept in memory only. It is not persisted to disk.
 - No password reset or account management UI.
 - No roles/permissions UI beyond basic admin flag.
 - No TLS/reverse proxy automation yet.
@@ -280,12 +279,34 @@ It re-executes the install command via sudo when not running as root, then verif
 README.md and docs/how-to-use-ja.md both point to this script as the recommended first
 step for Linux builds.
 
+## Session Token Persistence
+
+The client now persists session tokens through `light-discord-platform`:
+
+- `crates/light-discord-platform/src/session_token.rs` exposes `load_session_token`,
+  `save_session_token`, and `delete_session_token`.
+- Tokens are stored per server address using a SHA-256-derived key. The raw server
+  address is not used as a keyring username or fallback filename.
+- Windows uses Windows Credential Store through `keyring` when available.
+- Linux uses keyutils + Secret Service persistent storage through `keyring` when
+  available.
+- If keyring storage is unavailable, the fallback file lives under
+  `$XDG_CONFIG_HOME/light-discord/session-tokens` or
+  `$HOME/.config/light-discord/session-tokens` on Linux, and
+  `%APPDATA%\LightDiscord\session-tokens` or
+  `%USERPROFILE%\AppData\Roaming\LightDiscord\session-tokens` on Windows.
+  `LIGHT_DISCORD_CONFIG_DIR` overrides the root for tests and development.
+- Unix fallback token files are written with mode `0600`.
+- `crates/light-discord-client/src/app.rs` loads the default server token at startup,
+  auto-selects `Session` mode when one is found, saves tokens returned by Login/Register,
+  and provides `Load` / `Forget` controls in Session mode.
+
 ## Good Next Tasks
 
 Suggested next development steps:
 
-1. Persist client session token securely per OS through `light-discord-platform`.
-2. Add a small admin/account management UI.
+1. Add a small admin/account management UI.
+2. Screen sharing with full-screen and window capture selection.
 3. Add role/channel permission model.
 4. Add TLS/reverse-proxy deployment guide for self-hosting.
 5. Real AEC (with playback reference signal), DTX, and adaptive bitrate.
