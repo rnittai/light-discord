@@ -7,7 +7,7 @@ Light Discord is split into four Rust crates so Windows and Linux support can sh
 - `light-discord-core`: shared protocol types for chat, presence, voice room state, and UDP voice packets.
 - `light-discord-auth`: password hashing, invite code, and session token primitives for invite-only accounts.
 - `light-discord-storage`: PostgreSQL-backed persistence boundary plus a memory backend for local development and tests.
-- `light-discord-server`: TCP newline-delimited JSON chat/control server plus UDP voice packet relay.
+- `light-discord-server`: TCP newline-delimited JSON chat/control server plus UDP voice packet relay. The server parses the binary voice header (via `decode_voice_packet_binary`) to read `user_id`/`room_id` for routing, then forwards the original binary datagram unchanged without decoding the Opus payload.
 - `light-discord-client`: native desktop UI using `egui`/`eframe`; no Chromium or Electron.
 
 ## Platform-Specific Boundary
@@ -16,7 +16,7 @@ Light Discord is split into four Rust crates so Windows and Linux support can sh
 - `src/os/linux.rs`: Linux-specific integration notes for PipeWire/PulseAudio/ALSA, freedesktop notifications, and packaging.
 - `src/os/windows.rs`: Windows-specific integration notes for WASAPI, toast notifications, and MSI/portable packaging.
 
-The current voice path implements room membership, UDP packet relay, and `cpal` device enumeration for native input/output selection. The audio backend trait is present, and the default implementation is a no-op so the workspace can be developed without committing to a codec or stream pipeline too early. A production voice implementation should add `cpal` capture/playback streams, Opus encoding, and jitter buffering behind this boundary.
+The current voice path implements room membership, binary-framed UDP packet relay, and `cpal` device enumeration for native input/output selection. UDP voice payloads are encoded and decoded with `encode_voice_packet_binary`/`decode_voice_packet_binary` (magic/version header, length-prefixed `user_id`/`room_id`, sequence/sample_rate/channels/codec/frame_samples fields, and raw payload bytes). TCP chat/control remains newline-delimited JSON. The audio backend trait is present; `CpalAudioBackend` in `light-discord-platform` provides the full Opus 48 kHz capture/playback pipeline with jitter buffering.
 
 ## Persistence and Audit Boundary
 

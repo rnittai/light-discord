@@ -100,12 +100,12 @@ Admin:
 Voice:
 
 - Voice now runs through Opus 48 kHz mono 20 ms frames (960 samples per packet) with in-band FEC enabled and a `set_packet_loss_perc` hint of 10%. libopus is built statically via `audiopus_sys`'s `static` feature so no system libopus is required on Windows or Linux.
-- The on-the-wire `VoicePacket` carries `codec` ("opus" or legacy "pcm_s16le") and `frame_samples` fields. Both are serde-defaulted so old senders continue to deserialize as PCM. The relay simply forwards packets and is unaware of the codec.
+- UDP voice payloads are encoded with `encode_voice_packet_binary` and decoded with `decode_voice_packet_binary` (defined in `light-discord-core`). The binary format has a magic/version header, length-prefixed `user_id` and `room_id`, then `sequence`/`sample_rate`/`channels`/`codec`/`frame_samples` fixed fields, followed by the raw Opus payload bytes. The server parses the binary header to extract `user_id`/`room_id` for room routing and forwards the original binary datagram unchanged; it does not decode the Opus payload. TCP chat/control remains newline-delimited JSON.
 - `CpalAudioBackend` (in `light-discord-platform`) still owns the cpal capture/playback streams. Capture is downmixed to mono. Playback resamples and channel-adapts incoming 48 kHz mono frames to whatever the output device wants.
 - `light-discord-platform/src/voice.rs` provides the pure DSP/protocol helpers: a linear mono resampler, a single-pole high-pass filter, an RMS noise gate with hangover, a per-remote-user `JitterBuffer` that emits packets in sequence and reports `JitterPop::Lost { next_payload }` so the decoder can use Opus FEC, plus the cheap mic-ducking helper. All of these have unit tests.
 - The client voice worker (`crates/light-discord-client/src/voice.rs`) wires capture -> highpass -> noise gate -> echo duck -> Opus encode -> UDP send, and UDP recv -> jitter buffer -> Opus decode (with PLC/FEC for losses) -> playback. Closed-gate frames are suppressed and not transmitted (Opus DTX is not used). Heartbeat packets carry the current sequence number but do not advance it; only transmitted audio frames increment the sequence. A `VoiceShared` (`Arc<...>`) carries the mute/deafen toggles and the active-speaker timestamps shared with the UI; active-speaker is only marked for actually transmitted frames.
 - The egui client now exposes `Mute mic` and `Deafen` toggles in the Voice panel and highlights the active speaker(s) in the voice user list — including the local user.
-- Limitations: simple mic-ducking is *not* AEC. There is no SRTP, no DTX, no adaptive bitrate, and the JSON envelope is still in use. The server is unaware of codecs and just relays bytes.
+- Limitations: simple mic-ducking is *not* AEC. There is no SRTP, no DTX, no adaptive bitrate. The server reads the binary header for routing and relays the datagram unchanged; it does not decode Opus payloads.
 
 ## Current How To Use
 
@@ -229,7 +229,7 @@ At the time of this handoff, `main` was pushed to `origin/main`.
 - No password reset or account management UI.
 - No roles/permissions UI beyond basic admin flag.
 - No TLS/reverse proxy automation yet.
-- Voice runs Opus 48 kHz mono 20 ms with PLC/FEC and a jitter buffer; mute/deafen toggles and active-speaker highlighting are wired up. Closed-gate frames are suppressed at the source (Opus DTX is not used). Echo handling is a simple ducking heuristic, not full AEC. The wire format still wraps the Opus payload in JSON (`VoicePacket { codec: "opus", frame_samples: 960, ... }`) which is wasteful on bandwidth but keeps the relay codec-agnostic.
+- Voice runs Opus 48 kHz mono 20 ms with PLC/FEC and a jitter buffer; mute/deafen toggles and active-speaker highlighting are wired up. Closed-gate frames are suppressed at the source (Opus DTX is not used). Echo handling is a simple ducking heuristic, not full AEC. UDP datagrams use the binary codec (`encode_voice_packet_binary`/`decode_voice_packet_binary`). No SRTP/encryption, no adaptive bitrate.
 - Native packaging for Windows/Linux has not been implemented.
 - Docker CLI is not installed in the current container, though Docker Compose files exist for host-side use.
 
@@ -288,7 +288,7 @@ Suggested next development steps:
 2. Add a small admin/account management UI.
 3. Add role/channel permission model.
 4. Add TLS/reverse-proxy deployment guide for self-hosting.
-5. Real AEC (with playback reference signal), DTX, adaptive bitrate, and a binary voice envelope to replace the JSON wrapping.
+5. Real AEC (with playback reference signal), DTX, and adaptive bitrate.
 6. Add PostgreSQL cleanup/migration tests and reset helpers for local DB.
 7. Add packaging scripts for Windows and Linux.
 

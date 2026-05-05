@@ -166,7 +166,7 @@ cargo run -p light-discord-client
 - ハイパスフィルタ (約 100 Hz) と RMS ベースのノイズゲートを通す。ゲートが閉じているフレームは送信しない (Opus DTX は使用していない)
 - 受信側の出力が大きいときはマイクを軽く減衰させる簡易エコー抑制 (本格的な AEC ではありません)
 - 20 ms フレーム (960 サンプル) 単位で Opus 音声へエンコード (32 kbps、in-band FEC 有効、想定パケットロス 10%)
-- `VoicePacket { codec: "opus", frame_samples: 960, ... }` として既存の UDP リレーへ送信
+- `encode_voice_packet_binary` でバイナリエンコードして UDP リレーへ送信 (magic/version ヘッダー、length-prefix 付き user_id/room_id、sequence/sample_rate/channels/codec/frame_samples フィールド、Opus ペイロードバイト列)
 
 受信側はユーザーごとに jitter buffer (目標 ~60 ms = 3 パケット) を持ち、Opus PLC と FEC でパケットロスを補間しながら 48 kHz モノラルでデコードして、出力デバイスのサンプルレート/チャンネル数へ自動で適合させます。
 
@@ -189,7 +189,7 @@ scripts/setup-linux-dev-deps.sh
 | Arch / Manjaro | `sudo pacman -Sy --needed --noconfirm pkgconf alsa-lib cmake base-devel` |
 | openSUSE / SLES | `sudo zypper --non-interactive install pkgconf-pkg-config alsa-devel cmake gcc gcc-c++ make` |
 
-現時点の制約として、UDP の中身は依然として `VoicePacket` を JSON でくるんだ形式 (`codec` フィールドで Opus / 旧 PCM を区別) です。SRTP/暗号化、可変ビットレート、Opus DTX (無音抑制は RMS ノイズゲートで行い codec では行わない)、本格的な AEC、サーバ側の codec 認識は実装していないため、本番グレードの voice ではありませんが、自己ホストでの友達通話には十分使える品質を狙っています。
+現時点の制約として、SRTP/暗号化、可変ビットレート、Opus DTX (無音抑制は RMS ノイズゲートで行い codec では行わない)、本格的な AEC は実装していません。UDP ボイスはバイナリ形式 (`encode_voice_packet_binary`/`decode_voice_packet_binary`) で送受信しており、サーバーはバイナリヘッダーから user_id/room_id を読み取って転送するだけで Opus ペイロードは解釈しません。TCP チャット/コントロールは引き続き改行区切り JSON です。本番グレードの voice ではありませんが、自己ホストでの友達通話には十分使える品質を狙っています。
 
 ## 日本語が文字化けする場合
 
